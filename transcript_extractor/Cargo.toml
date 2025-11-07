@@ -1,0 +1,22 @@
+# Member crate configuration for transcript_extractor.
+#
+# This crate implements LLM-powered transcript analysis and action item extraction
+# using hexagonal architecture with the HEXSER framework. It is independent and
+# focused solely on extracting structured data from unstructured meeting transcripts.
+#
+# Revision History
+# - 2025-11-06T19:16:00Z @AI: Initial crate created from transcript_processor split.
+
+[package]
+name = "transcript_extractor"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+hexser = { workspace = true }
+serde = { workspace = true }
+schemars = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+serde_json = { workspace = true }
+ollama-rs = { workspace = true }

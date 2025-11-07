@@ -1,0 +1,26 @@
+# Member crate configuration for task_manager.
+#
+# This crate implements task persistence, lifecycle management, and querying
+# using hexagonal architecture with the HEXSER framework. It depends on
+# transcript_extractor for the ActionItem type used in task conversion.
+#
+# Revision History
+# - 2025-11-06T19:16:00Z @AI: Initial crate created from transcript_processor split.
+
+[package]
+name = "task_manager"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Local workspace crate dependency
+transcript_extractor = { path = "../transcript_extractor" }
+
+# Workspace dependencies
+hexser = { workspace = true }
+serde = { workspace = true }
+schemars = { workspace = true }
+tokio = { workspace = true }
+uuid = { workspace = true }
+parking_lot = { workspace = true }
+chrono = { workspace = true }

@@ -1,0 +1,55 @@
+# Docker Compose configuration for RigTask Pipeline development environment.
+#
+# This configuration provides a containerized Ollama LLM service for development
+# and testing without requiring local Ollama installation. The service is configured
+# to persist model data and expose the API on localhost:11434.
+#
+# Usage:
+#   docker-compose up -d          # Start Ollama service in background
+#   docker-compose logs -f ollama # View Ollama logs
+#   docker-compose down           # Stop and remove containers
+#   docker-compose down -v        # Stop and remove containers + volumes
+#
+# Prerequisites:
+#   - Docker Desktop (macOS/Windows) or Docker Engine (Linux)
+#   - Docker Compose v2.0+
+#
+# Revision History
+# - 2025-11-06T19:50:00Z @AI: Initial Docker Compose configuration for Ollama service.
+
+version: '3.8'
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: rig-task-ollama
+    ports:
+      # Expose Ollama API on localhost:11434
+      - "11434:11434"
+    volumes:
+      # Persist model data across container restarts
+      - ollama_data:/root/.ollama
+    environment:
+      # Configure Ollama to listen on all interfaces
+      - OLLAMA_HOST=0.0.0.0:11434
+    healthcheck:
+      # Health check to ensure Ollama is ready
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    restart: unless-stopped
+    # Uncomment the following lines if you have a GPU and want to use it
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+volumes:
+  ollama_data:
+    driver: local
+    name: rig-task-ollama-data

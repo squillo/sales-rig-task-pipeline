@@ -1,0 +1,58 @@
+# Workspace-level Cargo configuration for rig-task-pipeline project.
+#
+# This workspace manages multiple crates following hexagonal architecture patterns.
+# All dependencies are defined at the workspace level for consistency and centralized
+# version management. Member crates reference these dependencies using { workspace = true }.
+#
+# Revision History
+# - 2025-11-06T20:57:00Z @AI: Add candle framework dependencies for embedded ML inference adapter.
+# - 2025-11-06T20:31:00Z @AI: Replace testcontainers with reqwest for native Ollama integration tests.
+# - 2025-11-06T20:10:00Z @AI: Add testcontainers dependency for integration test automation.
+# - 2025-11-06T19:16:00Z @AI: Add transcript_extractor and task_manager to workspace members.
+# - 2025-11-06T18:50:00Z @AI: Initial workspace configuration created.
+
+[workspace]
+resolver = "2"
+members = [
+    "transcript_processor",
+    "transcript_extractor",
+    "task_manager",
+]
+
+[workspace.package]
+edition = "2024"
+authors = ["Squillo <squillo@example.com>"]
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+# Core framework dependencies
+rig-core = "0.9.1"
+hexser = { version = "0.4.7", features = ["macros"] }
+
+# Serialization and schema
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+schemars = { version = "0.8", features = ["derive"] }
+
+# Async runtime and traits
+tokio = { version = "1.42", features = ["full"] }
+async-trait = "0.1"
+
+# Utility crates
+uuid = { version = "1.11", features = ["v4", "serde"] }
+parking_lot = "0.12"
+chrono = { version = "0.4", features = ["serde"] }
+
+# LLM integration
+ollama-rs = "0.2"
+
+# Candle ML Framework for embedded inference
+candle-core = "0.9.2-alpha.1"
+candle-nn = "0.9.2-alpha.1"
+candle-transformers = "0.9.2-alpha.1"
+hf-hub = "0.4.3"
+tokenizers = "0.22.1"
+anyhow = "1.0"
+
+# HTTP client for service health checks
+reqwest = { version = "0.12", features = ["json"] }

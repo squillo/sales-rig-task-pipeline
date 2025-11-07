@@ -1,0 +1,57 @@
+# Docker ignore file for RigTask Pipeline project.
+#
+# This file specifies patterns to exclude from the Docker build context,
+# reducing image size and build time by excluding unnecessary files.
+#
+# Revision History
+# - 2025-11-06T19:50:00Z @AI: Initial .dockerignore file for project.
+
+# Rust build artifacts
+target/
+**/target/
+*.pdb
+
+# Cargo lock file (if not needed for reproducible builds)
+# Cargo.lock
+
+# Git files
+.git/
+.gitignore
+.gitattributes
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Documentation and planning files
+*.md
+TASK_PLAN.md
+README.md
+HEXSER_REFACTORING_PLAN.md
+REFACTORING_STATUS.md
+CRATE_SPLIT_ANALYSIS.md
+RESEARCH_1.md
+
+# Test files (if not needed in container)
+# tests/
+
+# Docker files (don't copy Docker files into Docker)
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Scripts
+setup-ollama.sh
+
+# Temporary files
+*.tmp
+*.log
+*.bak
+
+# macOS specific
+.AppleDouble
+.LSOverride

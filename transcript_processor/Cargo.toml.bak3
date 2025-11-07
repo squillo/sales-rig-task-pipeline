@@ -1,0 +1,44 @@
+# Member crate configuration for transcript_processor.
+#
+# This crate implements the transcript processing pipeline using hexagonal architecture
+# with the HEXSER framework. All dependencies are inherited from the workspace-level
+# Cargo.toml for centralized version management.
+#
+# Revision History
+# - 2025-11-06T20:57:00Z @AI: Add candle framework dependencies for embedded ML adapter.
+# - 2025-11-06T20:31:00Z @AI: Replace testcontainers with reqwest for native Ollama tests.
+# - 2025-11-06T19:30:00Z @AI: Add dependencies on transcript_extractor and task_manager crates.
+# - 2025-11-06T18:50:00Z @AI: Convert to workspace member, use workspace dependencies.
+# - 2025-11-06T18:00:00Z @AI: Initial crate configuration with HEXSER framework.
+
+[package]
+name = "transcript_processor"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "transcript_processor"
+path = "src/main.rs"
+
+
+
+[dependencies]
+# Local workspace crate dependencies
+transcript_extractor = { path = "../transcript_extractor" }
+task_manager = { path = "../task_manager" }
+
+# Workspace dependencies
+rig-core = { workspace = true }
+serde = { workspace = true }
+schemars = { workspace = true }
+tokio = { workspace = true }
+hexser = { workspace = true }
+async-trait = { workspace = true }
+uuid = { workspace = true }
+parking_lot = { workspace = true }
+chrono = { workspace = true }
+serde_json = { workspace = true }
+ollama-rs = { workspace = true }
+
+[dev-dependencies]
+reqwest.workspace = true
