@@ -4,6 +4,7 @@
 //! actionable task lists via LLM-based decomposition.
 //!
 //! Revision History
+//! - 2025-11-27T05:15:00Z @AI: Simplify remediation start messages for immediate feedback. Changed assignee remediation message from "Assignee '{}' not found, attempting LLM remediation..." to simple "Remediating assignee..." and JSON remediation from "Initial JSON parse failed: {}. Attempting remediation with {}..." to "Remediating JSON...". Shorter messages appear faster in red validation rows, providing immediate visual feedback that remediation has started instead of appearing locked up during long LLM calls.
 //! - 2025-11-27T04:45:00Z @AI: Remove all eprintln! debug logging from validate_assignee(). Replaced debug logging with ValidationInfo messages for: LLM remediation failures, fallback persona usage. Removed verbose logging for exact/case-insensitive/fuzzy matches (no messages needed for successful matches). All assignee validation feedback now properly streams through ValidationInfo channel to appear in red validation boxes instead of leaking to stderr.
 //! - 2025-11-27T04:30:00Z @AI: Add ValidationInfo streaming for JSON remediation. Send ValidationInfo messages when JSON parsing fails and remediation begins, and when remediation succeeds. Uses "JSON Parsing" as task_title since individual task titles aren't available yet at this stage. These messages now appear in red validation boxes in both the conversation and task list sections of the TUI, providing proper real-time feedback instead of being silently hidden.
 //! - 2025-11-27T04:15:00Z @AI: Remove JSON remediation debug logging to prevent TUI pollution. Removed eprintln! statements for "Initial JSON parse failed" and "Remediation succeeded" messages that were leaking into TUI output. These debug messages appeared as plain text in the conversation view instead of being properly formatted. Remediation still works silently, with error details available in error messages if remediation fails.
@@ -737,11 +738,11 @@ impl RigPRDParserAdapter {
         // Tier 4: LLM remediation - ask LLM to pick best match
         // (Validation message sent below)
 
-        // Send validation info update if channel is available
+        // Send immediate validation info update if channel is available
         if let std::option::Option::Some(tx) = update_tx {
             let _ = tx.send(PRDGenUpdate::ValidationInfo {
                 task_title: task_title.to_string(),
-                message: std::format!("Assignee '{}' not found, attempting LLM remediation...", assignee_str),
+                message: std::string::String::from("Remediating assignee..."),
             }).await;
         }
 
@@ -836,7 +837,7 @@ impl RigPRDParserAdapter {
                 if let std::option::Option::Some(tx) = update_tx {
                     let _ = tx.send(PRDGenUpdate::ValidationInfo {
                         task_title: std::string::String::from("JSON Parsing"),
-                        message: std::format!("Initial JSON parse failed: {}. Attempting remediation with {}...", e, fallback_model_name),
+                        message: std::string::String::from("Remediating JSON..."),
                     }).await;
                 }
 
@@ -966,7 +967,7 @@ mod tests {
     fn test_system_prompt_contains_key_instructions() {
         // Test: Validates system prompt includes essential instructions.
         // Justification: Ensures LLM receives proper guidance for task generation.
-        let prompt = super::RigPRDParserAdapter::system_prompt();
+        let prompt = super::RigPRDParserAdapter::build_system_prompt(&[]);
 
         std::assert!(prompt.contains("project management"));
         std::assert!(prompt.contains("JSON array"));
@@ -1032,7 +1033,7 @@ mod tests {
         // Justification: Must fail gracefully on bad LLM output (after remediation attempts).
         let json = "not valid json";
 
-        let result = super::RigPRDParserAdapter::parse_tasks_from_json(json, "prd-123", "llama3.2:latest", &[]).await;
+        let result = super::RigPRDParserAdapter::parse_tasks_from_json(json, "prd-123", "llama3.2:latest", &[], std::option::Option::None).await;
 
         std::assert!(result.is_err());
     }
@@ -1177,7 +1178,7 @@ Hope this helps!"#;
         // Justification: extract_json_from_response handles this case.
         let json = r#"{"title": "Not an array"}"#;
 
-        let result = super::RigPRDParserAdapter::parse_tasks_from_json(json, "prd-123", "llama3.2:latest", &[]).await;
+        let result = super::RigPRDParserAdapter::parse_tasks_from_json(json, "prd-123", "llama3.2:latest", &[], std::option::Option::None).await;
 
         // Should succeed after wrapping in array
         std::assert!(result.is_ok() || result.is_err());
@@ -1189,7 +1190,7 @@ Hope this helps!"#;
         // Justification: Title is mandatory for tasks.
         let json = r#"[{"description": "No title"}]"#;
 
-        let result = super::RigPRDParserAdapter::parse_tasks_from_json(json, "prd-123", "llama3.2:latest", &[]).await;
+        let result = super::RigPRDParserAdapter::parse_tasks_from_json(json, "prd-123", "llama3.2:latest", &[], std::option::Option::None).await;
 
         std::assert!(result.is_err());
     }

@@ -5,6 +5,7 @@
 //! reasoning display, and network request logging.
 //!
 //! Revision History
+//! - 2025-11-27T05:00:00Z @AI: Fix conversation scroll for wrapped text. Implemented manual text wrapping for long messages to accurately count visual lines before rendering. When message content exceeds available width, split into chunks and create separate Line objects with proper indentation for continuation lines. This ensures scroll offset calculation includes wrapped lines, preventing scroll lag when long validation messages or LLM responses appear. Removed reliance on Paragraph's automatic wrapping which happened after scroll calculation.
 //! - 2025-11-27T04:00:00Z @AI: Add comprehensive test for validation red row functionality. Created test_validation_red_row_functionality() that validates: (1) validation messages are stored in PartialTask.validation_messages vec, (2) task status transitions to Validating when remediation starts, (3) multiple validation messages accumulate correctly, (4) validation boxes appear in conversation with proper formatting. Test simulates complete validation workflow from assignee mismatch through LLM remediation success.
 //! - 2025-11-27T03:45:00Z @AI: Render validation boxes in red in conversation view. Modified conversation rendering to detect "┌─ Validation" boxes and render them in red color instead of yellow. This provides visual consistency - validation messages appear in red in both the conversation (blue box) and task list (green box) sections, making remediation events easily identifiable.
 //! - 2025-11-27T03:30:00Z @AI: Implement remediation red row feature for assignee validation. Added validation_messages field to PartialTask struct to store validation messages. Modified ValidationInfo handler to push messages to task's validation_messages vec and set status to Validating. Updated Generated Tasks rendering to display validation messages as indented red rows (└─) below each task. Added Validating status with yellow warning icon (⚠). This provides real-time visual feedback when assignee validation enters remediation in the green task list section.
@@ -8700,20 +8701,55 @@ fn render_interactive_generation(f: &mut Frame, area: Rect, app: &App) {
                     conversation_lines.push(Line::from(Span::styled(line_text, Style::default().fg(box_color))));
                 }
             } else {
-                // Regular message - show timestamp
+                // Regular message - show timestamp and manually wrap long content
                 let timestamp = msg.timestamp.format("%H:%M:%S").to_string();
-                conversation_lines.push(Line::from(vec![
-                    Span::styled(std::format!("{} ", icon), Style::default().fg(color)),
-                    Span::styled(std::format!("[{}] ", timestamp), Style::default().fg(Color::DarkGray)),
-                    Span::styled(&msg.content, Style::default().fg(color)),
-                ]));
+                let prefix = std::format!("{} [{}] ", icon, timestamp);
+                let prefix_len = prefix.len();
+
+                // Available width for content (subtract borders and prefix)
+                let available_width = chunks[0].width.saturating_sub(2 + prefix_len as u16) as usize;
+
+                if available_width > 0 && msg.content.len() > available_width {
+                    // Content needs wrapping - split into chunks
+                    let mut content_chars: std::vec::Vec<char> = msg.content.chars().collect();
+                    let mut offset = 0;
+
+                    while offset < content_chars.len() {
+                        let chunk_end = std::cmp::min(offset + available_width, content_chars.len());
+                        let chunk: std::string::String = content_chars[offset..chunk_end].iter().collect();
+
+                        if offset == 0 {
+                            // First line with prefix
+                            conversation_lines.push(Line::from(vec![
+                                Span::styled(std::format!("{} ", icon), Style::default().fg(color)),
+                                Span::styled(std::format!("[{}] ", timestamp), Style::default().fg(Color::DarkGray)),
+                                Span::styled(chunk.clone(), Style::default().fg(color)),
+                            ]));
+                        } else {
+                            // Continuation lines with indentation
+                            conversation_lines.push(Line::from(vec![
+                                Span::styled(" ".repeat(prefix_len), Style::default()),
+                                Span::styled(chunk.clone(), Style::default().fg(color)),
+                            ]));
+                        }
+
+                        offset += available_width;
+                    }
+                } else {
+                    // Content fits on one line
+                    conversation_lines.push(Line::from(vec![
+                        Span::styled(std::format!("{} ", icon), Style::default().fg(color)),
+                        Span::styled(std::format!("[{}] ", timestamp), Style::default().fg(Color::DarkGray)),
+                        Span::styled(&msg.content, Style::default().fg(color)),
+                    ]));
+                }
             }
             conversation_lines.push(Line::from(""));
         }
     }
 
     // Calculate scroll position to show the latest content
-    // Count total rendered lines (not just messages, since task boxes have multiple lines)
+    // Now total_lines includes manually wrapped lines, so scroll calculation is accurate
     let total_lines = conversation_lines.len();
     let available_height = chunks[0].height.saturating_sub(2) as usize; // Subtract border height
     let scroll_offset = if total_lines > available_height {
