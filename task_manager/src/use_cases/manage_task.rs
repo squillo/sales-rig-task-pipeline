@@ -5,6 +5,7 @@
 //! separation of concerns by delegating persistence to the repository port.
 //!
 //! Revision History
+//! - 2025-11-15T07:34:00Z @AI: Add no-run SQLite integration doc example demonstrating ManageTaskUseCase with SqliteTaskAdapter.
 //! - 2025-11-06T18:30:00Z @AI: Refactor to use generic concrete repository type (HEXSER pattern).
 //! - 2025-11-06T17:41:00Z @AI: Initial ManageTaskUseCase implementation.
 
@@ -23,14 +24,56 @@
 /// # Examples
 ///
 /// ```no_run
-/// # use task_manager::use_cases::manage_task::ManageTaskUseCase;
-/// # use task_manager::adapters::in_memory_task_adapter::InMemoryTaskAdapter;
-/// # use task_manager::domain::task_status::TaskStatus;
-/// # async fn example() {
-/// let repo = InMemoryTaskAdapter::new();
-/// let mut use_case = ManageTaskUseCase::new(repo);
-/// use_case.update_task_status("task-123", TaskStatus::InProgress).unwrap();
-/// # }
+/// // Demonstrates basic usage with the in-memory adapter.
+/// // This keeps the example simple and independent of async runtimes.
+/// let repo = task_manager::adapters::in_memory_task_adapter::InMemoryTaskAdapter::new();
+/// let mut use_case = task_manager::use_cases::manage_task::ManageTaskUseCase::new(repo);
+/// use_case.update_task_status(
+///     "task-123",
+///     task_manager::domain::task_status::TaskStatus::InProgress
+/// ).unwrap();
+/// ```
+///
+/// ```no_run
+/// // SQLite integration example (non-flaky; not executed during tests).
+/// //
+/// // This demonstrates wiring ManageTaskUseCase to the SQLite-backed
+/// // repository adapter. It builds a small current-thread Tokio runtime
+/// // to call the async connect_and_init() helper, then proceeds entirely
+/// // with synchronous HEXSER trait methods.
+/// //
+/// // 1) Connect to in-memory SQLite and initialize schema.
+/// let adapter = {
+///     let rt = tokio::runtime::Builder::new_current_thread()
+///         .enable_all()
+///         .build()
+///         .unwrap();
+///     rt.block_on(task_manager::adapters::sqlite_task_adapter::SqliteTaskAdapter::connect_and_init("sqlite::memory:"))
+///         .unwrap()
+/// };
+///
+/// // 2) Create a task and persist it via HEXSER's Repository trait.
+/// let mut repo = adapter;
+/// let action = transcript_extractor::domain::action_item::ActionItem {
+///     title: std::string::String::from("Doc Example Task"),
+///     assignee: std::option::Option::None,
+///     due_date: std::option::Option::None,
+/// };
+/// let mut task = task_manager::domain::task::Task::from_action_item(&action, std::option::Option::None);
+/// task.id = std::string::String::from("doc-1");
+/// <task_manager::adapters::sqlite_task_adapter::SqliteTaskAdapter as hexser::ports::Repository<task_manager::domain::task::Task>>::save(&mut repo, task)
+///     .unwrap();
+///
+/// // 3) Build the use case, update status, and retrieve sorted tasks.
+/// let mut use_case = task_manager::use_cases::manage_task::ManageTaskUseCase::new(repo);
+/// use_case
+///     .update_task_status("doc-1", task_manager::domain::task_status::TaskStatus::InProgress)
+///     .unwrap();
+/// let tasks = use_case.get_sorted_tasks(
+///     task_manager::ports::task_repository_port::TaskSortKey::Title,
+///     hexser::ports::repository::Direction::Asc,
+/// ).unwrap();
+/// std::assert!(!tasks.is_empty());
 /// ```
 pub struct ManageTaskUseCase<R>
 where

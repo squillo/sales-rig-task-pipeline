@@ -1,0 +1,26 @@
+# Cargo aliases to avoid accidental CUDA builds on unsupported platforms.
+# These do not change default build behavior but provide convenient commands
+# for common workflows.
+#
+# Notes:
+# - On macOS (Apple Silicon), prefer the Metal backend for Candle.
+# - CUDA requires NVIDIA drivers/toolkit and `nvcc` on PATH; do not use CUDA on macOS.
+
+[alias]
+# CPU-only tests for transcript_processor
+ tp-test-cpu = "test -p transcript_processor -- --nocapture"
+
+# Apple Metal (macOS) tests for transcript_processor
+ tp-test-metal = "test -p transcript_processor --features metal -- --nocapture"
+
+# NVIDIA CUDA tests for transcript_processor (Linux/Windows with CUDA installed)
+ tp-test-cuda = "test -p transcript_processor --features cuda -- --nocapture"
+
+# Run main with Candle on CPU
+ tp-run-candle-cpu = "run -p transcript_processor"
+
+# Run main with Candle on Metal (macOS)
+ tp-run-candle-metal = "run -p transcript_processor --features metal"
+
+# Run main with Candle on CUDA (Linux/Windows; requires nvcc)
+ tp-run-candle-cuda = "run -p transcript_processor --features cuda"

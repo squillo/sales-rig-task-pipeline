@@ -5,6 +5,9 @@
 # version management. Member crates reference these dependencies using { workspace = true }.
 #
 # Revision History
+# - 2025-11-15T15:43:00Z @AI: Add CUDA alias workspace deps to allow target-gated CUDA enabling in sub-crates; prevents cudarc on macOS.
+# - 2025-11-12T17:46:00Z @AI: Add graph-flow workspace dependency with rig feature (optional integration).
+# - 2025-11-08T15:35:00Z @AI: Disable Candle default features to avoid CUDA (cudarc/nvcc) on macOS during root tests; opt-in via per-crate features.
 # - 2025-11-06T20:57:00Z @AI: Add candle framework dependencies for embedded ML inference adapter.
 # - 2025-11-06T20:31:00Z @AI: Replace testcontainers with reqwest for native Ollama integration tests.
 # - 2025-11-06T20:10:00Z @AI: Add testcontainers dependency for integration test automation.
@@ -17,6 +20,8 @@ members = [
     "transcript_processor",
     "transcript_extractor",
     "task_manager",
+    "task_orchestrator",
+    "rigger_cli",
 ]
 
 [workspace.package]
@@ -27,12 +32,13 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 # Core framework dependencies
 rig-core = "0.9.1"
+rig = { version = "0.9.1", package = "rig-core" }
 hexser = { version = "0.4.7", features = ["macros"] }
 
 # Serialization and schema
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-schemars = { version = "0.8", features = ["derive"] }
+schemars = { version = "0.8", features = ["derive", "chrono"] }
 
 # Async runtime and traits
 tokio = { version = "1.42", features = ["full"] }
@@ -45,14 +51,22 @@ chrono = { version = "0.4", features = ["serde"] }
 
 # LLM integration
 ollama-rs = "0.2"
+graph-flow = { version = "0.2", features = ["rig"] }
+mistralrs = { git = "https://github.com/EricLBuehler/mistral.rs.git", default-features = false }
 
 # Candle ML Framework for embedded inference
-candle-core = "0.9.2-alpha.1"
-candle-nn = "0.9.2-alpha.1"
-candle-transformers = "0.9.2-alpha.1"
+candle-core = { version = "0.9.2-alpha.1", default-features = false }
+candle-nn = { version = "0.9.2-alpha.1", default-features = false }
+candle-transformers = { version = "0.9.2-alpha.1", default-features = false }
+# Aliases for target-gated CUDA enabling in sub-crates (no features here)
+candle_core_cuda = { package = "candle-core", version = "0.9.2-alpha.1", default-features = false }
+candle_nn_cuda = { package = "candle-nn", version = "0.9.2-alpha.1", default-features = false }
+candle_transformers_cuda = { package = "candle-transformers", version = "0.9.2-alpha.1", default-features = false }
 hf-hub = "0.4.3"
 tokenizers = "0.22.1"
 anyhow = "1.0"
 
 # HTTP client for service health checks
 reqwest = { version = "0.12", features = ["json"] }
+# SQLite persistence toolkit (optional at crate level; enabled via features)
+sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio-rustls"] }

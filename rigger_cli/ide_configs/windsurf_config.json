@@ -1,0 +1,21 @@
+{
+  "servers": {
+    "rigger": {
+      "type": "stdio",
+      "command": "rig",
+      "args": ["server"],
+      "description": "Rigger AI-Compatible Task Manager",
+      "tools": [
+        "list_tasks",
+        "add_task",
+        "update_task",
+        "parse_prd"
+      ],
+      "resources": [
+        "tasks.json",
+        "config.json",
+        "project_context"
+      ]
+    }
+  }
+}

@@ -13,6 +13,9 @@
 //! implementing the abstract interfaces (ports) defined by the application layer.
 //!
 //! Revision History
+//! - 2025-11-08T11:36:00Z @AI: Add optional embedded MistralRs adapter module (feature: mistralrs_embed).
+//! - 2025-11-08T10:55:00Z @AI: Add optional RigTranscriptExtractorAdapter module (feature: rig_adapter).
+//! - 2025-11-08T09:26:00Z @AI: Add optional MistralTranscriptExtractorAdapter module (feature: mistral_rs).
 //! - 2025-11-06T21:00:00Z @AI: Add CandleTranscriptExtractorAdapter for embedded ML inference.
 //! - 2025-11-06T18:56:00Z @AI: Update adapter name to OllamaTranscriptExtractorAdapter for clarity.
 //! - 2025-11-06T18:00:00Z @AI: Initial adapters module structure.
@@ -20,3 +23,9 @@
 pub mod ollama_adapter;
 pub mod candle_adapter;
 pub mod in_memory_task_adapter;
+#[cfg(feature = "mistral_rs")]
+pub mod mistral_adapter;
+#[cfg(feature = "rig_adapter")]
+pub mod rig_adapter;
+#[cfg(feature = "mistralrs_embed")]
+pub mod mistralrs_embed_adapter;

@@ -1,0 +1,46 @@
+[package]
+name = "rigger_cli"
+version = "0.1.0"
+edition = "2024"
+authors = ["Rigger Contributors"]
+description = "Command-line interface for Rigger AI project management"
+
+[[bin]]
+name = "rig"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace dependencies
+task_manager = { path = "../task_manager" }
+task_orchestrator = { path = "../task_orchestrator" }
+transcript_extractor = { path = "../transcript_extractor" }
+hexser = { version = "0.4.7", features = ["macros"] }
+rig = { workspace = true }
+chrono = { workspace = true }
+sqlx = { workspace = true }
+
+# CLI and display
+clap = { version = "4.4", features = ["derive"] }
+prettytable-rs = "0.10"
+ratatui = "0.29"
+crossterm = "0.28"
+arboard = "3.4"
+
+# Core utilities
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.41", features = ["full"] }
+anyhow = "1.0"
+uuid = { version = "1.11", features = ["v4"] }
+
+# File system and paths
+directories = "5.0"
+
+# gRPC and protobuf
+tonic = "0.12"
+prost = "0.13"
+tokio-stream = "0.1"
+async-stream = "0.3"
+
+[build-dependencies]
+tonic-build = "0.12"

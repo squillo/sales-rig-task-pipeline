@@ -5,6 +5,10 @@
 # Cargo.toml for centralized version management.
 #
 # Revision History
+# - 2025-11-15T15:43:00Z @AI: Gate CUDA feature to non-macOS via alias deps to prevent cudarc/nvcc build on macOS; map feature to aliases.
+# - 2025-11-08T13:45:00Z @AI: Make CUDA feature a no-op on macOS via target-specific optional deps to prevent cudarc/nvcc build on `--all-features`.
+# - 2025-11-08T11:35:00Z @AI: Add optional embedded mistral.rs adapter feature `mistralrs_embed` and optional dependency.
+# - 2025-11-08T09:26:00Z @AI: Add optional `mistral_rs` feature and HTTP adapter dependency (reqwest) for Mistral.rs integration.
 # - 2025-11-06T20:57:00Z @AI: Add candle framework dependencies for embedded ML adapter.
 # - 2025-11-06T20:31:00Z @AI: Replace testcontainers with reqwest for native Ollama tests.
 # - 2025-11-06T19:30:00Z @AI: Add dependencies on transcript_extractor and task_manager crates.
@@ -15,6 +19,7 @@
 name = "transcript_processor"
 version = "0.1.0"
 edition = "2024"
+build = "build.rs"
 
 [[bin]]
 name = "transcript_processor"
@@ -28,7 +33,7 @@ transcript_extractor = { path = "../transcript_extractor" }
 task_manager = { path = "../task_manager" }
 
 # Workspace dependencies
-rig-core = { workspace = true }
+# Alias rig-core as `rig` so code can reference `rig::...` per upstream docs.
 serde = { workspace = true }
 schemars = { workspace = true }
 tokio = { workspace = true }
@@ -38,7 +43,9 @@ uuid = { workspace = true }
 parking_lot = { workspace = true }
 chrono = { workspace = true }
 serde_json = { workspace = true }
+reqwest = { workspace = true }
 ollama-rs = { workspace = true }
+rig = { workspace = true }
 
 # Candle ML framework for embedded inference
 candle-core = { workspace = true }
@@ -48,5 +55,29 @@ hf-hub = { workspace = true }
 tokenizers = { workspace = true }
 anyhow = { workspace = true }
 
+# Optional embedded mistral.rs dependency (feature-gated)
+mistralrs = { workspace = true, optional = true }
+
 [dev-dependencies]
 reqwest.workspace = true
+
+[features]
+# Enable GPU backends by forwarding features to Candle crates.
+# Build with `-p transcript_processor --features metal` on macOS (Apple Metal backend).
+# Optional HTTP adapter for mistral.rs: enable with `--features mistral_rs`.
+# Optional Rig adapter (OpenAI provider): enable with `--features rig_adapter`.
+# Optional embedded mistral.rs adapter: enable with `--features mistralrs_embed`.
+
+default = []
+metal = [
+    "candle-core/metal",
+    "candle-nn/metal",
+    "candle-transformers/metal",
+]
+mistral_rs = []
+rig_adapter = []
+mistralrs_embed = ["mistralrs"]
+
+
+
+

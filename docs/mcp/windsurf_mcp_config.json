@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "rigger": {
+      "command": "rig",
+      "args": ["server"],
+      "cwd": "${workspaceFolder}",
+      "env": {},
+      "description": "Rigger task management MCP server - provides intelligent task decomposition, tracking, and PRD parsing"
+    }
+  }
+}

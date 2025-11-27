@@ -25,6 +25,7 @@
 //!
 //! Revision History
 //! - 2025-11-06T20:51:00Z @AI: Initial complex conversation integration test.
+//! - 2025-11-15T11:58:00Z @AI: Mark test #[ignore] by default to avoid timeouts in root workspace tests; run explicitly with `cargo test --test integration_ollama_complex_conversation -- --ignored`.
 
 /// Realistic 5-minute team standup with red herrings and natural conversation flow.
 ///
@@ -154,7 +155,8 @@ async fn check_ollama_service() -> Result<(), String> {
 }
 
 #[tokio::test]
-async fn test_complex_conversation_with_red_herrings() {
+#[ignore]
+async fn test_complex_ollama_conversation_with_red_herrings() {
     // Test: Validates the pipeline's ability to extract action items from a complex conversation
     // with red herrings (weather talk, lunch plans, holiday party discussion) and natural
     // interruptions.

@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "rigger": {
+      "command": "rig",
+      "args": ["server"],
+      "description": "Rigger AI-Compatible Task Manager - parse PRDs, manage tasks, intelligent decomposition"
+    }
+  }
+}

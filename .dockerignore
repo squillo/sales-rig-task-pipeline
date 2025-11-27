@@ -29,12 +29,12 @@ target/
 
 # Documentation and planning files
 *.md
-TASK_PLAN.md
+_archive/TASK_PLAN.md
 README.md
-HEXSER_REFACTORING_PLAN.md
-REFACTORING_STATUS.md
-CRATE_SPLIT_ANALYSIS.md
-RESEARCH_1.md
+_archive/HEXSER_REFACTORING_PLAN.md
+_archive/REFACTORING_STATUS.md
+_archive/CRATE_SPLIT_ANALYSIS.md
+_archive/RESEARCH_1.md
 
 # Test files (if not needed in container)
 # tests/

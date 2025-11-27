@@ -1,0 +1,50 @@
+# Member crate configuration for task_orchestrator.
+#
+# This crate will host the graph-based task orchestration (Brain + Muscle)
+# integrating rs-graph-llm and rig for schema-enforced LLM interactions.
+# It starts as a minimal library and will evolve over Phases 3–7 of TASK_PLAN_3.
+#
+# Revision History
+# - 2025-11-18T10:15:00Z @AI: Replace `postgres_persistence` feature with `sqlite_persistence` per project direction.
+# - 2025-11-13T18:42:00Z @AI: Mark graph-flow as optional to fix feature mapping; crate tests pass.
+# - 2025-11-12T17:46:00Z @AI: Add optional graph-flow dependency and feature mapping graph_flow = ["dep:graph-flow"].
+# - 2025-11-12T22:48:00Z @AI: Add Cargo features `graph_flow` and `postgres_persistence` to gate future integrations.
+# - 2025-11-12T21:16:00Z @AI: Add chrono workspace dependency for unit tests.
+# - 2025-11-12T20:47:00Z @AI: Initialize crate with workspace and local dependencies for Phase 2.
+
+[package]
+name = "task_orchestrator"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Local workspace crates
+task_manager = { path = "../task_manager" }
+transcript_extractor = { path = "../transcript_extractor" }
+
+# Workspace-managed dependencies
+hexser = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+schemars = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+rig-core = { workspace = true }
+ollama-rs = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+reqwest = { workspace = true }
+# Graph runtime (rs-graph-llm aka graph-flow) unified dependency
+graph-flow = { workspace = true }
+# SQLite persistence via sqlx (metrics collection and optional task persistence)
+sqlx = { workspace = true }
+# Futures for streaming
+futures = "0.3"
+
+# NOTE: Graph framework dependencies to be added in Phase 6–7 after resolution via Context7 MCP.
+# rs-graph-llm = "0.1.0"
+# rs-graph-llm-postgres = "0.1.0"
+
+[features]
+# SQLite is now always available (for metrics collection)
+default = []

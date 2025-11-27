@@ -1,6 +1,6 @@
 ## **task_id: TP-20251106-7**
 
-status: completed
+status: in-progress
 
 ## **Agent Operational Protocol**
 
@@ -112,18 +112,20 @@ The pipeline will extract structured data (Action Items) and **persist them as T
 
 ## **Current Step**
 
-* **Action:** Fix Candle phi3 generation shape-mismatch during tests.
-* **Details:** Addressed runtime error `shape mismatch in broadcast_add` by:
-  - Clearing KV cache after warmup to avoid contaminating real generation
-  - Switching to prompt-first pass (seqlen_offset=0) then single-token incremental decoding
-  - Computing correct `seqlen_offset = prompt_len + generated_len - 1` per step
-  - Preserved streaming logs, JSON early-stop, and env controls (CANDLE_MAX_NEW_TOKENS, CANDLE_STREAM_INTERVAL)
-  
-Next: Run integration tests from the crate directory to validate fix:
-- cd transcript_processor && cargo test --test integration_candle_complex_conversation -- --nocapture
-- cd transcript_processor && cargo test --test integration_candle_five_person_conversation -- --nocapture
+* **Action:** Guard against CUDA build failures on macOS when running workspace-wide tests; provide platform-aware commands.
+* **Details:**
+  - Clarified build error cause and guidance in transcript_processor/build.rs (mentions `--all-features` on macOS and corrections).
+  - Updated README Troubleshooting to explicitly warn against `cargo test --all-features` on macOS and provide per-package CPU/Metal/CUDA commands.
+  - Retained existing GPU auto-detection, features (metal/cuda), and Cargo aliases in .cargo/config.toml.
 
-The transcript_processor crate supports Ollama and Candle extractors via EXTRACTOR env var (EXTRACTOR=ollama|candle).
+Validation steps:
+- macOS (CPU): cargo test -p transcript_processor -- --nocapture
+- macOS (Metal): CANDLE_DEVICE=metal cargo test -p transcript_processor --features metal -- --nocapture
+- Linux/Windows (CUDA): CANDLE_DEVICE=cuda cargo test -p transcript_processor --features cuda -- --nocapture
+- Avoid: `cargo test --all-features` on macOS (will attempt CUDA and fail nvcc).
+
+Notes:
+- For workspace-wide runs on macOS, test each crate separately and enable features per-crate (use `-p transcript_processor`).
 
 ## **Blockers**
 

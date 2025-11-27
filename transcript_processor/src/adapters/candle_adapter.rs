@@ -6,6 +6,14 @@
 //! the model inference entirely in-process using Rust-native tensor operations.
 //!
 //! Revision History
+//! - 2025-11-23T22:10:00Z @AI: Update imports from task_manager::utils to task_manager::infrastructure (HEXSER compliance).
+//! - 2025-11-08T08:57:00Z @AI: Add process-wide in-memory cache for Candle model/tokenizer to skip rebuild; env CANDLE_DISABLE_MODEL_CACHE to bypass.
+//! - 2025-11-08T08:39:30Z @AI: Delegate tolerant JSON parsing to task_manager::infrastructure for shared reuse across adapters.
+//! - 2025-11-08T08:27:00Z @AI: Make JSON parsing tolerant in Candle adapter (map common alias fields to schema) to fix missing `title` errors.
+//! - 2025-11-08T08:06:00Z @AI: Add auto GPU device selection (CUDA/Metal) with env override and safe CPU fallback; verbose logs and Context7-verified API usage.
+//! - 2025-11-07T12:11:00Z @AI: Default-enable prefill cap to last 256 tokens (env overrideable) to mitigate CPU-bound prefill slowness; add guidance log.
+//! - 2025-11-07T11:41:00Z @AI: Add prefill safeguards (default chunk=32, time/token budget, per-chunk timing) to prevent perceived hangs during long prefill.
+//! - 2025-11-07T10:45:00Z @AI: Add chunked prompt prefill with progress logs and CANDLE_PREFILL_CHUNK to prevent hangs during long prompt prefill.
 //! - 2025-11-07T10:06:00Z @AI: Fix KV-cache/mask shape mismatch by clearing cache after warmup and switching to prompt-first then incremental single-token decoding with proper seqlen_offset.
 //! - 2025-11-07T09:49:00Z @AI: Stream generation progress, use Phi-3.5 eos_token_id, add early-stop on valid JSON, and warmup pass to pre-touch weights.
 //! - 2025-11-07T09:37:40Z @AI: Add explicit progress logging and stdout flushing during HF Hub downloads and model init to avoid apparent hangs.
@@ -44,12 +52,14 @@
 /// # Ok(())
 /// # }
 /// ```
+static CANDLE_MODEL_CACHE: std::sync::OnceLock<std::sync::Arc<(std::sync::Arc<std::sync::RwLock<candle_transformers::models::phi3::Model>>, std::sync::Arc<tokenizers::Tokenizer>, std::sync::Arc<candle_core::Device>, std::sync::Arc<candle_transformers::models::phi3::Config>)>> = std::sync::OnceLock::new();
+
 #[derive(hexser::HexAdapter)]
 pub struct CandleTranscriptExtractorAdapter {
-    model: std::sync::RwLock<candle_transformers::models::phi3::Model>,
-    tokenizer: tokenizers::Tokenizer,
-    device: candle_core::Device,
-    config: candle_transformers::models::phi3::Config,
+    model: std::sync::Arc<std::sync::RwLock<candle_transformers::models::phi3::Model>>,
+    tokenizer: std::sync::Arc<tokenizers::Tokenizer>,
+    device: std::sync::Arc<candle_core::Device>,
+    config: std::sync::Arc<candle_transformers::models::phi3::Config>,
 }
 
 impl CandleTranscriptExtractorAdapter {
@@ -81,10 +91,199 @@ impl CandleTranscriptExtractorAdapter {
             let _ = std::io::Write::flush(&mut out);
         }
 
-        log("[Candle] Selecting compute device (CPU by default)...");
-        // Initialize device (CPU by default, can be extended for GPU support)
-        let device = candle_core::Device::Cpu;
-        log("[Candle] ✓ Device ready: CPU");
+        log("[Candle] Selecting compute device (auto-detect: Metal/CUDA/CPU)...");
+        // Determine desired device from env or auto-detect. GPU backends require compiling candle-core with corresponding features.
+        let requested = std::env::var("CANDLE_DEVICE").unwrap_or_else(|_| std::string::String::from("auto"));
+        // Log compiled backend availability (compile-time flags).
+        let cuda_compiled = cfg!(feature = "cuda");
+        let metal_compiled = cfg!(feature = "metal");
+        log(&std::format!(
+            "[Candle] Backend features compiled: cuda={}, metal={}",
+            cuda_compiled, metal_compiled
+        ));
+
+        let device = {
+            if requested.eq_ignore_ascii_case("cpu") {
+                log("[Candle] Forcing CPU per CANDLE_DEVICE=cpu");
+                candle_core::Device::Cpu
+            } else if requested.eq_ignore_ascii_case("cuda") {
+                #[cfg(feature = "cuda")]
+                {
+                    match candle_core::Device::new_cuda(0) {
+                        std::result::Result::Ok(dev) => {
+                            log("[Candle] ✓ Using CUDA device 0");
+                            dev
+                        }
+                        std::result::Result::Err(e) => {
+                            log(&std::format!("[Candle] ⚠ CUDA init failed: {}. Falling back to CPU.", e));
+                            candle_core::Device::Cpu
+                        }
+                    }
+                }
+                #[cfg(not(feature = "cuda"))]
+                {
+                    log("[Candle] ⚠ CUDA backend not compiled. Falling back to CPU.");
+                    candle_core::Device::Cpu
+                }
+            } else if requested.eq_ignore_ascii_case("metal") {
+                #[cfg(feature = "metal")]
+                {
+                    match candle_core::Device::new_metal(0) {
+                        std::result::Result::Ok(dev) => {
+                            log("[Candle] ✓ Using Metal device 0");
+                            dev
+                        }
+                        std::result::Result::Err(e) => {
+                            log(&std::format!("[Candle] ⚠ Metal init failed: {}. Falling back to CPU.", e));
+                            candle_core::Device::Cpu
+                        }
+                    }
+                }
+                #[cfg(not(feature = "metal"))]
+                {
+                    log("[Candle] ⚠ Metal backend not compiled. Falling back to CPU.");
+                    candle_core::Device::Cpu
+                }
+            } else {
+                // Auto-detect
+                #[cfg(target_os = "macos")]
+                {
+                    // Prefer Metal on macOS when available, then CUDA, else CPU.
+                    #[cfg(feature = "metal")]
+                    {
+                        match candle_core::Device::new_metal(0) {
+                            std::result::Result::Ok(dev) => {
+                                log("[Candle] ✓ Auto-detected Metal on macOS (device 0)");
+                                dev
+                            }
+                            std::result::Result::Err(e) => {
+                                log(&std::format!("[Candle] ⚠ Metal init failed: {}. Trying CUDA...", e));
+                                #[cfg(feature = "cuda")]
+                                {
+                                    match candle_core::Device::new_cuda(0) {
+                                        std::result::Result::Ok(dev2) => {
+                                            log("[Candle] ✓ Fallback to CUDA device 0");
+                                            dev2
+                                        }
+                                        std::result::Result::Err(e2) => {
+                                            log(&std::format!("[Candle] ⚠ CUDA init failed: {}. Using CPU.", e2));
+                                            candle_core::Device::Cpu
+                                        }
+                                    }
+                                }
+                                #[cfg(not(feature = "cuda"))]
+                                {
+                                    candle_core::Device::Cpu
+                                }
+                            }
+                        }
+                    }
+                    #[cfg(not(feature = "metal"))]
+                    {
+                        #[cfg(feature = "cuda")]
+                        {
+                            match candle_core::Device::new_cuda(0) {
+                                std::result::Result::Ok(dev2) => {
+                                    log("[Candle] ✓ Auto-selected CUDA device 0 (macOS build without Metal)");
+                                    dev2
+                                }
+                                std::result::Result::Err(e2) => {
+                                    log(&std::format!("[Candle] ⚠ CUDA init failed: {}. Using CPU.", e2));
+                                    candle_core::Device::Cpu
+                                }
+                            }
+                        }
+                        #[cfg(not(feature = "cuda"))]
+                        {
+                            candle_core::Device::Cpu
+                        }
+                    }
+                }
+                #[cfg(not(target_os = "macos"))]
+                {
+                    // Prefer CUDA on non-macOS, else Metal if compiled, else CPU.
+                    #[cfg(feature = "cuda")]
+                    {
+                        match candle_core::Device::new_cuda(0) {
+                            std::result::Result::Ok(dev) => {
+                                log("[Candle] ✓ Auto-selected CUDA device 0");
+                                dev
+                            }
+                            std::result::Result::Err(e) => {
+                                log(&std::format!("[Candle] ⚠ CUDA init failed: {}. Trying Metal...", e));
+                                #[cfg(feature = "metal")]
+                                {
+                                    match candle_core::Device::new_metal(0) {
+                                        std::result::Result::Ok(dev2) => {
+                                            log("[Candle] ✓ Fallback to Metal device 0");
+                                            dev2
+                                        }
+                                        std::result::Result::Err(e2) => {
+                                            log(&std::format!("[Candle] ⚠ Metal init failed: {}. Using CPU.", e2));
+                                            candle_core::Device::Cpu
+                                        }
+                                    }
+                                }
+                                #[cfg(not(feature = "metal"))]
+                                {
+                                    candle_core::Device::Cpu
+                                }
+                            }
+                        }
+                    }
+                    #[cfg(not(feature = "cuda"))]
+                    {
+                        #[cfg(feature = "metal")]
+                        {
+                            match candle_core::Device::new_metal(0) {
+                                std::result::Result::Ok(dev) => {
+                                    log("[Candle] ✓ Auto-selected Metal device 0");
+                                    dev
+                                }
+                                std::result::Result::Err(e) => {
+                                    log(&std::format!("[Candle] ⚠ Metal init failed: {}. Using CPU.", e));
+                                    candle_core::Device::Cpu
+                                }
+                            }
+                        }
+                        #[cfg(not(feature = "metal"))]
+                        {
+                            candle_core::Device::Cpu
+                        }
+                    }
+                }
+            }
+        };
+
+        match &device {
+            candle_core::Device::Cpu => {
+                log("[Candle] ✓ Device ready: CPU");
+                if !cuda_compiled && !metal_compiled {
+                    log("[Candle] Hint: build with `--features cuda` (NVIDIA) or `--features metal` (macOS) for GPU acceleration.");
+                }
+            }
+            _ => {
+                log("[Candle] ✓ Device ready: GPU");
+            }
+        }
+
+        // Wrap device in Arc for shared, cached usage.
+        let device = std::sync::Arc::new(device);
+
+        // Process-wide cache: reuse already-built model/tokenizer to avoid rebuild costs.
+        let disable_cache_env = std::env::var("CANDLE_DISABLE_MODEL_CACHE").unwrap_or_else(|_| std::string::String::from("false"));
+        let disable_cache = matches!(disable_cache_env.to_ascii_lowercase().as_str(), "1" | "true" | "yes");
+        if !disable_cache {
+            if let std::option::Option::Some(cache_arc) = CANDLE_MODEL_CACHE.get().cloned() {
+                log("[Candle] Using cached in-memory model/tokenizer (set CANDLE_DISABLE_MODEL_CACHE=1 to rebuild).");
+                return std::result::Result::Ok(Self {
+                    model: std::sync::Arc::clone(&cache_arc.0),
+                    tokenizer: std::sync::Arc::clone(&cache_arc.1),
+                    device: std::sync::Arc::clone(&cache_arc.2),
+                    config: std::sync::Arc::clone(&cache_arc.3),
+                });
+            }
+        }
 
         log("[Candle] Initializing Hugging Face Hub API and repository handle...");
         // Download model and tokenizer from HuggingFace Hub
@@ -143,7 +342,7 @@ impl CandleTranscriptExtractorAdapter {
             candle_nn::VarBuilder::from_mmaped_safetensors(
                 &[weights_path_1, weights_path_2],
                 candle_core::DType::F32,
-                &device,
+                &*device,
             )?
         };
         log("[Candle] ✓ Weights memory-mapped");
@@ -161,7 +360,7 @@ impl CandleTranscriptExtractorAdapter {
                 .map_err(|e| anyhow::anyhow!("Warmup tokenization error: {}", e))?;
             enc.get_ids().to_vec()
         };
-        let warmup_input = candle_core::Tensor::new(warmup_ids.as_slice(), &device)?.unsqueeze(0)?;
+        let warmup_input = candle_core::Tensor::new(warmup_ids.as_slice(), &*device)?.unsqueeze(0)?;
         let _ = model.forward(&warmup_input, 0);
         log("[Candle] ✓ Warmup complete");
 
@@ -169,11 +368,29 @@ impl CandleTranscriptExtractorAdapter {
         model.clear_kv_cache();
         log("[Candle] ✓ Cleared KV cache after warmup");
 
+        // Wrap components in Arc for caching and shared reuse
+        let model_arc: std::sync::Arc<std::sync::RwLock<candle_transformers::models::phi3::Model>> = std::sync::Arc::new(std::sync::RwLock::new(model));
+        let tokenizer_arc: std::sync::Arc<tokenizers::Tokenizer> = std::sync::Arc::new(tokenizer);
+        let config_arc: std::sync::Arc<candle_transformers::models::phi3::Config> = std::sync::Arc::new(config);
+
+        if !disable_cache {
+            let tuple_arc = std::sync::Arc::new((
+                std::sync::Arc::clone(&model_arc),
+                std::sync::Arc::clone(&tokenizer_arc),
+                std::sync::Arc::clone(&device),
+                std::sync::Arc::clone(&config_arc),
+            ));
+            let _ = CANDLE_MODEL_CACHE.set(tuple_arc);
+            log("[Candle] ✓ Cached model/tokenizer in memory for reuse within this process.");
+        } else {
+            log("[Candle] Cache disabled by CANDLE_DISABLE_MODEL_CACHE; not storing model in global cache.");
+        }
+
         std::result::Result::Ok(Self {
-            model: std::sync::RwLock::new(model),
-            tokenizer,
+            model: model_arc,
+            tokenizer: tokenizer_arc,
             device,
-            config,
+            config: config_arc,
         })
     }
 
@@ -238,8 +455,25 @@ Respond with ONLY the JSON array, no other text."#,
             .tokenizer
             .encode(prompt, true)
             .map_err(|e| anyhow::anyhow!("Tokenization error: {}", e))?;
-        let prompt_ids: std::vec::Vec<u32> = tokens.get_ids().to_vec();
+        let mut prompt_ids: std::vec::Vec<u32> = tokens.get_ids().to_vec();
         log(&std::format!("[Candle] Tokenized prompt: {} tokens", prompt_ids.len()));
+
+        // Prefill cap: by default, limit to last 256 tokens to mitigate CPU-bound prefill latency.
+        // Override with CANDLE_PREFILL_MAX_TOKENS (set to 0 to disable capping).
+        let prefill_max_tokens = std::env::var("CANDLE_PREFILL_MAX_TOKENS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(256);
+        if prefill_max_tokens > 0 && prompt_ids.len() > prefill_max_tokens {
+            let start_idx = prompt_ids.len() - prefill_max_tokens;
+            let original = prompt_ids.len();
+            prompt_ids = prompt_ids[start_idx..].to_vec();
+            log(&std::format!(
+                "[Candle] Prefill capped to last {} tokens (from {} total). Set CANDLE_PREFILL_MAX_TOKENS=0 to disable.",
+                prefill_max_tokens,
+                original
+            ));
+        }
 
         // Generation controls (env-overridable)
         let max_new_tokens = std::env::var("CANDLE_MAX_NEW_TOKENS")
@@ -257,9 +491,67 @@ Respond with ONLY the JSON array, no other text."#,
         // Acquire the model (mutable) once for the whole decode loop
         let mut model = self.model.write().unwrap();
 
-        // 1) Prompt pass: run the full prompt once with seqlen_offset=0 to populate KV cache.
-        let prompt_input = candle_core::Tensor::new(prompt_ids.as_slice(), &self.device)?.unsqueeze(0)?;
-        let mut logits = model.forward(&prompt_input, 0)?;
+        // 1) Prompt prefill: run the prompt in chunks to populate KV cache with visible progress.
+        // Default smaller chunk for better responsiveness on CPU.
+        let prefill_chunk = std::env::var("CANDLE_PREFILL_CHUNK")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(32);
+        let prefill_budget_ms = std::env::var("CANDLE_PREFILL_TIME_BUDGET_MS")
+            .ok()
+            .and_then(|v| v.parse::<u128>().ok());
+        let total = prompt_ids.len();
+        let total_chunks = if total == 0 { 0 } else { (total + prefill_chunk - 1) / prefill_chunk };
+        let mut offset = 0usize;
+        let mut logits_opt: std::option::Option<candle_core::Tensor> = std::option::Option::None;
+        let mut chunk_idx = 0usize;
+        let prefill_start = std::time::Instant::now();
+        while offset < total {
+            let end = std::cmp::min(offset + prefill_chunk, total);
+            chunk_idx += 1;
+            let chunk_len = end - offset;
+            log(&std::format!(
+                "[Candle] Prefill chunk {}/{} (tokens {}..{} of {})...",
+                chunk_idx,
+                total_chunks,
+                offset,
+                end.saturating_sub(1),
+                total
+            ));
+            let chunk_t0 = std::time::Instant::now();
+            let chunk = &prompt_ids[offset..end];
+            let chunk_input = candle_core::Tensor::new(chunk, &*self.device)?.unsqueeze(0)?;
+            logits_opt = std::option::Option::Some(model.forward(&chunk_input, offset)?);
+            let chunk_ms = chunk_t0.elapsed().as_millis();
+            let tps = if chunk_ms > 0 { (chunk_len as u128 * 1000) / chunk_ms } else { 0 };
+            log(&std::format!(
+                "[Candle] ✓ Prefill chunk {}/{} complete in {} ms (~{} tok/s)",
+                chunk_idx,
+                total_chunks,
+                chunk_ms,
+                tps
+            ));
+            offset = end;
+            if let Some(budget_ms) = prefill_budget_ms {
+                let elapsed_ms = prefill_start.elapsed().as_millis();
+                if elapsed_ms >= budget_ms {
+                    log(&std::format!(
+                        "[Candle] ⏱ Prefill time budget reached ({} ms >= {} ms). Proceeding to generation early.",
+                        elapsed_ms,
+                        budget_ms
+                    ));
+                    break;
+                }
+            }
+        }
+        let mut logits = match logits_opt {
+            std::option::Option::Some(t) => t,
+            std::option::Option::None => {
+                // Empty prompt edge-case (should not happen for our usage)
+                return std::result::Result::Ok(std::string::String::new());
+            }
+        };
+        log("[Candle] ✓ Prefill complete");
 
         // 2) Incremental decoding: feed one token at a time with correct seqlen_offset.
         let mut generated: std::vec::Vec<u32> = std::vec::Vec::new();
@@ -316,8 +608,10 @@ Respond with ONLY the JSON array, no other text."#,
 
             // Prepare one-token input and forward with correct seqlen_offset (prompt length + tokens already in KV cache)
             let one = [next_token];
-            let step_input = candle_core::Tensor::new(&one, &self.device)?.unsqueeze(0)?;
-            let seqlen_offset = prompt_ids.len() + generated.len() - 1;
+            let step_input = candle_core::Tensor::new(&one, &*self.device)?.unsqueeze(0)?;
+            // Use actual number of tokens prefilled into the KV cache (offset), not total prompt length,
+            // to avoid mask/KV length mismatch when prefill was capped or ended early due to time budget.
+            let seqlen_offset = offset + generated.len() - 1;
             logits = model.forward(&step_input, seqlen_offset)?;
         }
 
@@ -333,24 +627,22 @@ Respond with ONLY the JSON array, no other text."#,
     /// Parses the LLM response string into a vector of ActionItem entities.
     ///
     /// Attempts to extract and deserialize JSON from the response into ActionItem structs.
-    /// Returns an error if the response doesn't contain valid JSON or doesn't match
-    /// the expected schema.
+    /// Delegates tolerant parsing to task_manager::infrastructure to centralize logic across crates.
     fn parse_response(
         &self,
         response_text: &str,
     ) -> std::result::Result<std::vec::Vec<crate::domain::action_item::ActionItem>, String> {
-        // Try to find JSON array in response (model might include extra text)
-        let json_start = response_text
-            .find('[')
-            .ok_or_else(|| "No JSON array found in response".to_string())?;
-        let json_end = response_text
-            .rfind(']')
-            .ok_or_else(|| "No JSON array found in response".to_string())?;
-
-        let json_str = &response_text[json_start..=json_end];
-
-        serde_json::from_str(json_str)
-            .map_err(|e| std::format!("Failed to parse LLM response as JSON: {}", e))
+        let parsed: std::vec::Vec<task_manager::infrastructure::dtos::extracted_action_item::ExtractedActionItem> =
+            task_manager::infrastructure::llm_parsers::action_item_parser::parse_action_items_tolerant(response_text)?;
+        let mapped: std::vec::Vec<crate::domain::action_item::ActionItem> = parsed
+            .into_iter()
+            .map(|e| crate::domain::action_item::ActionItem {
+                title: e.title,
+                assignee: e.assignee,
+                due_date: e.due_date,
+            })
+            .collect();
+        std::result::Result::Ok(mapped)
     }
 }
 

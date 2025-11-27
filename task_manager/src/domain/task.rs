@@ -5,6 +5,11 @@
 //! links back to the source transcript for traceability.
 //!
 //! Revision History
+//! - 2025-11-26T09:45:00Z @AI: Add completion_summary field to store LLM's summary when task is completed.
+//! - 2025-11-24T08:45:00Z @AI: Add description field for detailed task information (Phase 8 prerequisite).
+//! - 2025-11-23T15:15:00Z @AI: Add intelligence fields (complexity, reasoning, context_files, dependencies) for Phase 2 Sprint 4.
+//! - 2025-11-22T16:10:00Z @AI: Add Rigger fields (source_prd_id, parent_task_id, subtask_ids) for Phase 0.
+//! - 2025-11-12T20:28:00Z @AI: Add enhancements and comprehension_tests fields for orchestration Phase 1.
 //! - 2025-11-06T19:01:00Z @AI: Moved to task_manager crate, updated from_action_item to use transcript_extractor::ActionItem.
 //! - 2025-11-06T18:14:00Z @AI: Add HexEntity derive for HEXSER framework alignment.
 //! - 2025-11-06T17:41:00Z @AI: Initial Task struct definition with from_action_item constructor.
@@ -18,13 +23,22 @@
 /// # Fields
 ///
 /// * `id` - Unique identifier (UUID) for this task.
-/// * `title` - The task's title or description.
+/// * `title` - The task's title or short summary.
+/// * `description` - Detailed description of the task.
 /// * `assignee` - Optional person responsible for completing the task.
 /// * `due_date` - Optional deadline in string format.
 /// * `status` - Current lifecycle status of the task.
 /// * `source_transcript_id` - Optional link to the originating transcript.
+/// * `source_prd_id` - Optional link to the PRD that generated this task.
+/// * `parent_task_id` - Optional parent task ID for subtask hierarchies.
+/// * `subtask_ids` - List of subtask IDs if this task was decomposed.
 /// * `created_at` - UTC timestamp when task was created.
 /// * `updated_at` - UTC timestamp of last modification.
+/// * `complexity` - Optional complexity score (1-10 scale, higher = more complex).
+/// * `reasoning` - Optional LLM's chain-of-thought explanation for enhancements.
+/// * `completion_summary` - Optional LLM-generated summary of what was done when completing the task.
+/// * `context_files` - List of relevant codebase files for context engineering.
+/// * `dependencies` - List of task IDs this task depends on.
 ///
 /// # Examples
 ///
@@ -45,8 +59,11 @@ pub struct Task {
     /// Unique identifier for this task (UUID v4).
     pub id: String,
 
-    /// The title or description of the task.
+    /// The title or short summary of the task.
     pub title: String,
+
+    /// Detailed description of the task.
+    pub description: String,
 
     /// The person assigned to complete this task.
     pub assignee: Option<String>,
@@ -60,11 +77,41 @@ pub struct Task {
     /// Optional link to the source transcript this task was extracted from.
     pub source_transcript_id: Option<String>,
 
+    /// Optional link to the PRD that generated this task.
+    pub source_prd_id: Option<String>,
+
+    /// Optional parent task ID for subtask hierarchies.
+    pub parent_task_id: Option<String>,
+
+    /// List of subtask IDs if this task was decomposed.
+    pub subtask_ids: std::vec::Vec<String>,
+
     /// UTC timestamp when this task was created.
     pub created_at: chrono::DateTime<chrono::Utc>,
 
     /// UTC timestamp of the last modification to this task.
     pub updated_at: chrono::DateTime<chrono::Utc>,
+
+    /// Optional list of enhancements generated for this task during orchestration.
+    pub enhancements: Option<std::vec::Vec<crate::domain::enhancement::Enhancement>>,
+
+    /// Optional list of comprehension tests associated with this task.
+    pub comprehension_tests: Option<std::vec::Vec<crate::domain::comprehension_test::ComprehensionTest>>,
+
+    /// Optional complexity score (1-10 scale, higher = more complex).
+    pub complexity: Option<u8>,
+
+    /// Optional LLM's chain-of-thought explanation for enhancements or reasoning.
+    pub reasoning: Option<String>,
+
+    /// Optional LLM-generated summary of what was done when completing the task.
+    pub completion_summary: Option<String>,
+
+    /// List of relevant codebase files for context engineering.
+    pub context_files: std::vec::Vec<String>,
+
+    /// List of task IDs this task depends on.
+    pub dependencies: std::vec::Vec<String>,
 }
 
 impl Task {
@@ -106,12 +153,23 @@ impl Task {
         Task {
             id: uuid::Uuid::new_v4().to_string(),
             title: action.title.clone(),
+            description: String::new(),
             assignee: action.assignee.clone(),
             due_date: action.due_date.clone(),
             status: crate::domain::task_status::TaskStatus::Todo,
             source_transcript_id: transcript_id,
+            source_prd_id: std::option::Option::None,
+            parent_task_id: std::option::Option::None,
+            subtask_ids: std::vec::Vec::new(),
             created_at: now,
             updated_at: now,
+            enhancements: std::option::Option::None,
+            comprehension_tests: std::option::Option::None,
+            complexity: std::option::Option::None,
+            reasoning: std::option::Option::None,
+            completion_summary: std::option::Option::None,
+            context_files: std::vec::Vec::new(),
+            dependencies: std::vec::Vec::new(),
         }
     }
 }

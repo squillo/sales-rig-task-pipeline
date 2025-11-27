@@ -1,0 +1,271 @@
+syntax = "proto3";
+
+package rigger.v1;
+
+// Rigger gRPC service for task management and orchestration.
+//
+// This service provides task CRUD operations, PRD parsing, and real-time
+// task event streaming for sidecar consumers. Designed for distributed
+// architectures where multiple services need to observe task state changes.
+service RiggerService {
+  // Task Management Operations
+
+  /// Lists tasks with optional filters (status, assignee).
+  rpc ListTasks(ListTasksRequest) returns (ListTasksResponse);
+
+  /// Creates a new task from an action item.
+  rpc AddTask(AddTaskRequest) returns (AddTaskResponse);
+
+  /// Updates an existing task's status or assignee.
+  rpc UpdateTask(UpdateTaskRequest) returns (UpdateTaskResponse);
+
+  /// Retrieves a single task by ID.
+  rpc GetTask(GetTaskRequest) returns (GetTaskResponse);
+
+  /// Deletes a task (sets status to Archived).
+  rpc DeleteTask(DeleteTaskRequest) returns (DeleteTaskResponse);
+
+  // PRD Operations
+
+  /// Parses a PRD markdown file and extracts objectives, tech stack, constraints.
+  rpc ParsePRD(ParsePRDRequest) returns (ParsePRDResponse);
+
+  /// Generates tasks from a parsed PRD using LLM decomposition.
+  rpc GenerateTasksFromPRD(GenerateTasksFromPRDRequest) returns (GenerateTasksFromPRDResponse);
+
+  // Task Orchestration
+
+  /// Runs a task through the orchestration flow (enhancement + comprehension test).
+  rpc OrchestrateTask(OrchestrateTaskRequest) returns (OrchestrateTaskResponse);
+
+  // Event Streaming for Sidecars
+
+  /// Subscribes to task events (created, updated, deleted) for broadcast to sidecars.
+  /// Returns a stream of TaskEvent messages.
+  rpc SubscribeToTaskEvents(SubscribeToTaskEventsRequest) returns (stream TaskEvent);
+
+  /// Bidirectional streaming for real-time task updates.
+  /// Client can send task updates, server broadcasts events to all subscribers.
+  rpc TaskEventStream(stream TaskEventStreamRequest) returns (stream TaskEvent);
+}
+
+// ============================================================================
+// Task Messages
+// ============================================================================
+
+message Task {
+  string id = 1;
+  string title = 2;
+  optional string assignee = 3;
+  optional string due_date = 4;  // ISO 8601 format
+  TaskStatus status = 5;
+  optional string source_transcript_id = 6;
+  optional string source_prd_id = 7;
+  optional string parent_task_id = 8;
+  repeated string subtask_ids = 9;
+  string created_at = 10;  // RFC 3339 timestamp
+  string updated_at = 11;  // RFC 3339 timestamp
+  optional uint32 complexity = 12;  // 1-10 scale
+  optional string reasoning = 13;
+  repeated string context_files = 14;
+  repeated string dependencies = 15;
+}
+
+enum TaskStatus {
+  TASK_STATUS_UNSPECIFIED = 0;
+  TASK_STATUS_TODO = 1;
+  TASK_STATUS_IN_PROGRESS = 2;
+  TASK_STATUS_PENDING_ENHANCEMENT = 3;
+  TASK_STATUS_PENDING_COMPREHENSION_TEST = 4;
+  TASK_STATUS_PENDING_FOLLOW_ON = 5;
+  TASK_STATUS_PENDING_DECOMPOSITION = 6;
+  TASK_STATUS_DECOMPOSED = 7;
+  TASK_STATUS_ORCHESTRATION_COMPLETE = 8;
+  TASK_STATUS_COMPLETED = 9;
+  TASK_STATUS_ARCHIVED = 10;
+}
+
+// ============================================================================
+// List Tasks
+// ============================================================================
+
+message ListTasksRequest {
+  optional TaskStatus status = 1;
+  optional string assignee = 2;
+  optional uint32 limit = 3;
+  optional uint32 offset = 4;
+}
+
+message ListTasksResponse {
+  repeated Task tasks = 1;
+  uint32 total_count = 2;
+}
+
+// ============================================================================
+// Add Task
+// ============================================================================
+
+message AddTaskRequest {
+  string title = 1;
+  optional string assignee = 2;
+  optional string due_date = 3;  // ISO 8601 format
+  optional string source_prd_id = 4;
+  optional string parent_task_id = 5;
+}
+
+message AddTaskResponse {
+  Task task = 1;
+}
+
+// ============================================================================
+// Update Task
+// ============================================================================
+
+message UpdateTaskRequest {
+  string task_id = 1;
+  optional TaskStatus status = 2;
+  optional string assignee = 3;
+  optional string due_date = 4;
+}
+
+message UpdateTaskResponse {
+  Task task = 1;
+}
+
+// ============================================================================
+// Get Task
+// ============================================================================
+
+message GetTaskRequest {
+  string task_id = 1;
+}
+
+message GetTaskResponse {
+  Task task = 1;
+}
+
+// ============================================================================
+// Delete Task
+// ============================================================================
+
+message DeleteTaskRequest {
+  string task_id = 1;
+}
+
+message DeleteTaskResponse {
+  bool success = 1;
+}
+
+// ============================================================================
+// Parse PRD
+// ============================================================================
+
+message ParsePRDRequest {
+  string prd_file_path = 1;
+}
+
+message ParsePRDResponse {
+  string prd_id = 1;
+  string prd_title = 2;
+  repeated string objectives = 3;
+  repeated string tech_stack = 4;
+  repeated string constraints = 5;
+}
+
+// ============================================================================
+// Generate Tasks from PRD
+// ============================================================================
+
+message GenerateTasksFromPRDRequest {
+  string prd_id = 1;
+  string model = 2;  // LLM model to use (e.g., "llama3.1")
+}
+
+message GenerateTasksFromPRDResponse {
+  repeated Task tasks = 1;
+  uint32 tasks_generated = 2;
+}
+
+// ============================================================================
+// Orchestrate Task
+// ============================================================================
+
+message OrchestrateTaskRequest {
+  string task_id = 1;
+  string model = 2;  // LLM model to use
+  string test_type = 3;  // Comprehension test type (e.g., "short_answer")
+}
+
+message OrchestrateTaskResponse {
+  Task task = 1;
+  OrchestrationResult result = 2;
+}
+
+message OrchestrationResult {
+  bool success = 1;
+  string routing_decision = 2;  // "enhance", "decompose", "pass"
+  optional Enhancement enhancement = 3;
+  optional ComprehensionTest comprehension_test = 4;
+  repeated Task subtasks = 5;
+}
+
+message Enhancement {
+  string enhancement_id = 1;
+  string task_id = 2;
+  string timestamp = 3;
+  string enhancement_type = 4;
+  string content = 5;
+}
+
+message ComprehensionTest {
+  string test_id = 1;
+  string task_id = 2;
+  string timestamp = 3;
+  string test_type = 4;
+  string question = 5;
+  repeated string options = 6;
+  string correct_answer = 7;
+}
+
+// ============================================================================
+// Task Event Streaming (for Sidecar Broadcast)
+// ============================================================================
+
+message SubscribeToTaskEventsRequest {
+  // Optional filter criteria for events
+  repeated TaskEventType event_types = 1;
+  optional string assignee_filter = 2;
+}
+
+message TaskEventStreamRequest {
+  oneof request {
+    SubscribeToTaskEventsRequest subscribe = 1;
+    TaskUpdate update = 2;
+  }
+}
+
+message TaskUpdate {
+  string task_id = 1;
+  optional TaskStatus status = 2;
+  optional string assignee = 3;
+}
+
+message TaskEvent {
+  string event_id = 1;
+  string timestamp = 2;  // RFC 3339
+  TaskEventType event_type = 3;
+  Task task = 4;
+  optional string actor = 5;  // Who triggered the event
+  map<string, string> metadata = 6;
+}
+
+enum TaskEventType {
+  TASK_EVENT_TYPE_UNSPECIFIED = 0;
+  TASK_EVENT_TYPE_CREATED = 1;
+  TASK_EVENT_TYPE_UPDATED = 2;
+  TASK_EVENT_TYPE_DELETED = 3;
+  TASK_EVENT_TYPE_STATUS_CHANGED = 4;
+  TASK_EVENT_TYPE_ASSIGNED = 5;
+  TASK_EVENT_TYPE_DECOMPOSED = 6;
+  TASK_EVENT_TYPE_ORCHESTRATED = 7;
+}

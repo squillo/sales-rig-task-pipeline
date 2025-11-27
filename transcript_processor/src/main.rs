@@ -19,6 +19,9 @@
 //! - Use Candle adapter: EXTRACTOR=candle cargo run
 //!
 //! Revision History
+//! - 2025-11-08T11:36:00Z @AI: Add mistral.rs embedded adapter selection via EXTRACTOR=mistral_embed with feature gate.
+//! - 2025-11-08T10:55:00Z @AI: Add Rig adapter selection via EXTRACTOR=rig with feature gate.
+//! - 2025-11-08T10:44:00Z @AI: Add Mistral.rs adapter selection via EXTRACTOR=mistral with feature gate.
 //! - 2025-11-07T09:15:00Z @AI: Align runtime/docs with Phi-3.5-mini-instruct for Candle; Context7-verified phi3 support in candle-transformers 0.9.2-alpha.1.
 //! - 2025-11-07T08:34:00Z @AI: Revert Candle adapter to Phi-2 to fix config deserialization error (~5.3GB).
 //! - 2025-11-06T21:43:00Z @AI: Downgrade Candle adapter from Phi-4 to Phi-3.5-mini-instruct to reduce download size (~7.1GB instead of 14.7GB).
@@ -58,6 +61,42 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                 .await
                 .map_err(|e| std::format!("Failed to initialize Candle adapter: {}", e))?;
             std::sync::Arc::new(candle_adapter)
+        },
+        "mistral" => {
+            println!("Initializing Mistral.rs adapter (via mistralrs-server)...");
+            #[cfg(feature = "mistral_rs")]
+            {
+                let adapter = transcript_processor::adapters::mistral_adapter::MistralTranscriptExtractorAdapter::new();
+                std::sync::Arc::new(adapter)
+            }
+            #[cfg(not(feature = "mistral_rs"))]
+            {
+                panic!("EXTRACTOR=mistral requires building with --features mistral_rs on the transcript_processor crate");
+            }
+        },
+        "mistral_embed" => {
+            println!("Initializing embedded mistral.rs adapter (ISQ Q4K + paged attention)...");
+            #[cfg(feature = "mistralrs_embed")]
+            {
+                let adapter = transcript_processor::adapters::mistralrs_embed_adapter::MistralRsEmbeddedTranscriptExtractorAdapter::new();
+                std::sync::Arc::new(adapter)
+            }
+            #[cfg(not(feature = "mistralrs_embed"))]
+            {
+                panic!("EXTRACTOR=mistral_embed requires building with --features mistralrs_embed on the transcript_processor crate");
+            }
+        },
+        "rig" => {
+            println!("Initializing Rig adapter (OpenAI provider)...");
+            #[cfg(feature = "rig_adapter")]
+            {
+                let adapter = transcript_processor::adapters::rig_adapter::RigTranscriptExtractorAdapter::new();
+                std::sync::Arc::new(adapter)
+            }
+            #[cfg(not(feature = "rig_adapter"))]
+            {
+                panic!("EXTRACTOR=rig requires building with --features rig_adapter on the transcript_processor crate");
+            }
         },
         "ollama" | _ => {
             println!("Initializing Ollama adapter with llama3.2 model...");

@@ -5,6 +5,7 @@
 # transcript_extractor for the ActionItem type used in task conversion.
 #
 # Revision History
+# - 2025-11-08T08:40:00Z @AI: Add serde_json workspace dependency for tolerant parser utils.
 # - 2025-11-06T19:16:00Z @AI: Initial crate created from transcript_processor split.
 
 [package]
@@ -20,7 +21,9 @@ transcript_extractor = { path = "../transcript_extractor" }
 hexser = { workspace = true }
 serde = { workspace = true }
 schemars = { workspace = true }
+serde_json = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }
 parking_lot = { workspace = true }
 chrono = { workspace = true }
+sqlx = { workspace = true }

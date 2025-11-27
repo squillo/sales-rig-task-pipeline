@@ -36,6 +36,7 @@
 //! - 2025-11-06T20:15:00Z @AI: Implement automated container lifecycle with testcontainers-rs.
 //! - 2025-11-06T19:50:00Z @AI: Add Docker setup instructions for easier testing.
 //! - 2025-11-06T19:44:00Z @AI: Initial integration test with realistic 5-person conversation.
+//! - 2025-11-15T11:58:00Z @AI: Mark test #[ignore] by default to avoid timeouts in root workspace tests; run explicitly with `cargo test --test integration_ollama_five_person_conversation -- --ignored`.
 
 /// Realistic 5-minute team meeting transcript with 5 participants.
 ///
@@ -154,7 +155,8 @@ async fn check_ollama_service() -> Result<(), String> {
 }
 
 #[tokio::test]
-async fn test_five_person_conversation_integration() {
+#[ignore]
+async fn test_ollama_five_person_conversation_integration() {
     // Test: Validates the complete pipeline with a realistic 5-minute, 5-person conversation.
     // Justification: This integration test ensures the system can handle real-world meeting
     // transcripts with multiple speakers, diverse action items, and complex conversational
