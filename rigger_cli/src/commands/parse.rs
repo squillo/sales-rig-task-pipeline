@@ -3,6 +3,7 @@
 //! Parses a PRD markdown file and generates tasks using LLM-based decomposition.
 //!
 //! Revision History
+//! - 2025-11-27T09:00:00Z @AI: Add auto-decomposition for complex tasks. After saving generated tasks, iterate through them and auto-decompose any with complexity >= 7. For each complex task: (1) call parser.decompose_task() to generate 3-5 sub-tasks, (2) save sub-tasks to database, (3) update parent task with subtask_ids and Decomposed status. Provides progress feedback ("🔄 Decomposing complex task...") and summary stats. Decomposition failures are non-fatal - logs warning and continues with original task.
 //! - 2025-11-25T20:47:00Z @AI: Fix "runtime within runtime" error by using save_async() instead of blocking save().
 //! - 2025-11-22T17:10:00Z @AI: Full implementation of parse command for Rigger Phase 0 Sprint 0.3.
 
@@ -151,6 +152,55 @@ pub async fn execute(prd_file: &str) -> anyhow::Result<()> {
 
     println!("✓ Saved {} tasks to {}", tasks.len(), db_path.display());
     println!();
+
+    // Auto-decompose complex tasks (complexity >= 7)
+    let mut total_subtasks = 0;
+    for task in &tasks {
+        if let std::option::Option::Some(complexity) = task.complexity {
+            if complexity >= 7 {
+                println!("🔄 Decomposing complex task (complexity {}): {}", complexity, task.title);
+
+                // Recreate parser for decomposition (needs same config)
+                let parser = task_orchestrator::adapters::rig_prd_parser_adapter::RigPRDParserAdapter::new(
+                    model_name.to_string(),
+                    config["task_tools"]["fallback"]["model"].as_str().unwrap_or(model_name).to_string(),
+                    std::vec::Vec::new() // Personas already validated in original tasks
+                );
+
+                match parser.decompose_task(task, &prd_content).await {
+                    std::result::Result::Ok(subtasks) => {
+                        println!("  ✓ Generated {} sub-tasks", subtasks.len());
+
+                        // Save sub-tasks
+                        for subtask in &subtasks {
+                            task_manager::adapters::sqlite_task_adapter::SqliteTaskAdapter::save_async(&adapter, subtask.clone()).await?;
+                        }
+
+                        // Update parent task with subtask IDs and Decomposed status
+                        let mut updated_parent = task.clone();
+                        updated_parent.subtask_ids = subtasks.iter().map(|st| st.id.clone()).collect();
+                        updated_parent.status = task_manager::domain::task_status::TaskStatus::Decomposed;
+                        task_manager::adapters::sqlite_task_adapter::SqliteTaskAdapter::save_async(&adapter, updated_parent).await?;
+
+                        total_subtasks += subtasks.len();
+                    }
+                    std::result::Result::Err(e) => {
+                        eprintln!("  ⚠️  Decomposition failed: {}", e);
+                        eprintln!("  → Continuing with original task");
+                    }
+                }
+            }
+        }
+    }
+
+    if total_subtasks > 0 {
+        println!();
+        println!("✓ Auto-decomposed {} complex tasks into {} sub-tasks",
+            tasks.iter().filter(|t| t.complexity.unwrap_or(0) >= 7).count(),
+            total_subtasks
+        );
+        println!();
+    }
 
     // Print next steps
     println!("Next steps:");

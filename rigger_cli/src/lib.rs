@@ -11,3 +11,4 @@ pub mod display;
 pub mod ports;
 pub mod adapters;
 pub mod services;
+pub mod constants;

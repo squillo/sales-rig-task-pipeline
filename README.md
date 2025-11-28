@@ -183,6 +183,59 @@ The orchestration flow:
 Task → Complexity Scorer → Router → [Enhance → Test] or [Decompose] → Complete
 ```
 
+#### Task Decomposition & Hierarchy
+
+Rigger automatically decomposes complex tasks (complexity >= 7) into manageable sub-tasks during PRD parsing. This creates a hierarchical task structure for better organization and execution.
+
+**Automatic Decomposition**:
+```bash
+# Parse PRD - complex tasks automatically decompose
+rig parse PRD.md
+```
+
+When a generated task has complexity >= 7:
+1. LLM analyzes the task and PRD context
+2. Generates 3-5 sub-tasks with lower complexity (default 3)
+3. Links sub-tasks to parent via `parent_task_id`
+4. Updates parent task status to `Decomposed`
+5. Displays summary: "✓ Auto-decomposed X complex tasks into Y sub-tasks"
+
+**Hierarchy in TUI**:
+```
+TODO Column:
+┌─────────────────────
+│ 🔹 Implement Auth System (8)     ← Parent task
+├─────────────────────
+├─ 🔹 Setup JWT middleware (3)      ← First sub-task
+├─────────────────────
+├─ 🔹 Add OAuth provider (3)        ← Intermediate sub-task
+├─────────────────────
+└─ 🔹 Write auth tests (3)          ← Last sub-task
+└─────────────────────
+```
+
+**Visual Indicators**:
+- `├─` - Intermediate child task
+- `└─` - Last child task
+- Indentation shows parent-child relationship
+- Age icons (🔹/⏰/🔴) show task freshness
+
+**Task Fields**:
+```rust
+Task {
+    parent_task_id: Option<String>,  // Link to parent
+    subtask_ids: Vec<String>,        // List of children
+    complexity: Option<u8>,          // 1-10 scale
+    status: TaskStatus::Decomposed,  // Parent status after decomposition
+}
+```
+
+**Benefits**:
+- Large epics broken into actionable items
+- Better workload distribution
+- Clearer progress tracking
+- Hierarchical navigation in TUI
+
 #### Terminal User Interface (TUI)
 
 ```bash
@@ -191,7 +244,8 @@ rig tui
 ```
 
 **Features**:
-- **📋 Task Board**: Kanban columns (TODO, IN PROGRESS, COMPLETED)
+- **📋 Task Board**: Kanban columns (TODO, IN PROGRESS, COMPLETED, ARCHIVED, ERRORED)
+- **🌳 Task Hierarchy**: Parent-child relationships with tree indicators (├─, └─)
 - **🧠 Thinking**: Chain-of-thought reasoning visualization
 - **🌐 Network**: API request/response logging
 - **❓ Help**: Keyboard controls reference

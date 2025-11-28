@@ -5,6 +5,21 @@
 //! reasoning display, and network request logging.
 //!
 //! Revision History
+//! - 2025-11-28T01:35:00Z @AI: Implement intent-based auto-scroll with prd_gen_auto_scroll flag. Added boolean flag (default true) that tracks user's scroll intent. Auto-scroll ONLY when flag is true, allowing blue text blocks to fill and grow while keeping bottom visible. User actions: Up/PageUp/Home disable auto-scroll (preserve manual position), Down/PageDown/End re-enable when reaching absolute bottom, sending message re-enables. This implements expected behavior: (1) let blue LLM text fill up and auto-scroll as it grows, (2) user can scroll up to review history without being pulled back down, (3) auto-scroll resumes only when user returns to bottom. Flag-based approach is cleaner than position comparison.
+//! - 2025-11-28T01:30:00Z @AI: Fix text wrapping with proper height estimation and smart auto-scroll. (1) Calculate wrapped text height based on text length - estimate ~100 chars per line, use ceil() to allocate sufficient space for wrapped content. Previously fixed height of 2 caused wrapped text to be cut off. (2) Implement smart auto-scroll - only auto-scroll when user is already at bottom (scroll_offset >= len - 2). Checks if user scrolled up manually before auto-scrolling, preserving user's scroll position when reviewing history. Both fixes address: blue LLM text now wraps properly, and conversation auto-scrolls down as messages arrive only if user is at bottom.
+//! - 2025-11-28T01:25:00Z @AI: Fix text wrapping by using single Span instead of multiple. Changed text message construction from two separate Spans (icon + text) to single Span with combined text (icon + text as one string). Ratatui's wrap functionality works on text content, not on Lines with multiple Spans - having icon and text as separate Spans created single unwrappable unit. Now full_text combines icon and text into single string, allowing Paragraph.wrap() to properly wrap long messages across multiple lines. Streaming text now wraps correctly.
+//! - 2025-11-28T01:20:00Z @AI: Implement full conversation scrolling with keyboard controls. Replaced message trimming with true scrolling using prd_gen_scroll_offset state. Rendering calculates visible window starting from scroll offset and shows messages that fit in available height. Keyboard controls: Up/Down (scroll 1 message), PageUp/PageDown (scroll 5 messages), Home (jump to top), End (jump to bottom). Auto-scroll to latest message when new messages arrive (scroll_offset = len - 1). Users can now scroll through entire conversation history while LLM is generating tasks, providing full visibility into the thinking process. Fixes conversation box shrinkage - messages always render at proper size.
+//! - 2025-11-28T01:15:00Z @AI: Fix conversation box shrinkage when many messages present. Implemented intelligent message trimming that calculates total height needed for all messages and removes oldest messages until remaining fit in available space. Changed all constraints back to Constraint::Length (from Min) to prevent layout fighting. Before rendering, algorithm walks backward from newest message, summing heights, and stops adding messages when available_height exceeded. This ensures each message renders at its proper size without shrinkage, while auto-scrolling shows most recent messages that fit. Fixes issue where adding more messages caused all boxes to shrink progressively.
+//! - 2025-11-28T01:10:00Z @AI: Fix text message height constraints to accommodate wrapping. Changed text message layout constraint from Constraint::Length to Constraint::Min to allow messages to grow when text wraps to multiple lines. Previously, wrapped text was cut off because fixed-height allocation (2 lines) couldn't accommodate longer wrapped content. Min constraint ensures text gets at least calculated height but can expand as needed when wrapping occurs, preventing text from disappearing.
+//! - 2025-11-28T01:05:00Z @AI: Add text wrapping to conversation text blocks. Added .wrap(Wrap { trim: true }) to text message Paragraph rendering to enable automatic line wrapping for long messages. Text now wraps within the available width of the conversation container instead of being truncated or overflowing. Applies to all streaming text messages (Assistant thinking, User input, System messages) displayed in borderless blocks with timestamp labels.
+//! - 2025-11-28T01:00:00Z @AI: Implement nested sub-task rendering inside parent task blocks. Removed BoxContent::SubTask variant and created SubTaskInfo struct instead. Task blocks now contain Vec<SubTaskInfo> for nested sub-tasks. Updated decomposition logic to find parent Task message and append subtasks to its vector instead of creating separate messages. Rendering now shows sub-tasks inside yellow task block with orange-colored numbered list format (1., 2., etc.) with indented fields. Dynamic height calculation: base 9 lines + 2 for header + 6 lines per subtask. Sub-tasks display with all fields (Title, Assignee, Priority, Complexity, Description) indented under "Sub-tasks (N):" section.
+//! - 2025-11-28T00:40:00Z @AI: Add Priority field to Task/SubTask blocks and update rendering. Updated BoxContent enum to include priority field for both Task and SubTask variants. Modified PRDGenUpdate::TaskGenerated in task_orchestrator to include assignee, priority, and complexity as separate fields instead of embedding in description. Updated streaming code to extract these fields from JSON. Enhanced block rendering to display all fields in key:value format (Title, Assignee, Priority, Complexity, Description). Text message height now accounts for borderless block title (+1 line). Task domain doesn't have priority field yet, so SubTask creation uses None for priority.
+//! - 2025-11-28T00:20:00Z @AI: Fix missing conversation container block after refactoring. Restored outer Block widget with cyan border and conversation title that wraps all messages. When refactoring to individual message blocks, accidentally removed the parent container. Now renders conversation_block first to create the blue border, extracts inner area with .inner(), then splits that area for individual messages. Removed dead conversation_lines code that was no longer used after refactor. Conversation section now properly shows bordered blue box with project title.
+//! - 2025-11-28T00:00:00Z @AI: Refactor text streaming blocks to use borderless Block widgets with timestamp labels. Updated MessageItem::Text enum variant to include timestamp field. Modified text message rendering to use Block::default().borders(Borders::NONE).title(timestamp) instead of inline timestamp spans. Text messages now display timestamp as block label in dark gray, keeping content clean while maintaining temporal context. Yellow-bordered Task blocks and orange-bordered SubTask blocks remain unchanged as structured content containers.
+//! - 2025-11-27T14:30:00Z @AI: Add orange sub-task boxes to conversation view during decomposition. Modified SavingTasks state decomposition logic to create PRDGenMessage entries for each generated sub-task. Sub-task boxes display "┌─ Sub-task Generated" header with title, assignee, complexity, and description in orange (RGB 255,165,0) color. Updated conversation rendering to detect "┌─ Sub-task" prefix and apply orange color. This provides real-time visual feedback as complex tasks are automatically decomposed into manageable sub-tasks, appearing below the parent yellow task box in the conversation history.
+//! - 2025-11-27T14:00:00Z @AI: Add PRD title to processing headers for better context. Modified render_prd_processing() and render_interactive_generation() to include PRD title in headers when prd_processing_prd is available. Headers now show "📋 Processing PRD - {prd.title}" and "💭 LLM Conversation - {prd.title}" instead of generic text. This provides immediate context during long-running task generation sessions, addressing user feedback that project name helps track progress when processing takes significant time.
+//! - 2025-11-27T11:00:00Z @AI: Wire auto-decomposition into interactive TUI PRD flow. Added decomposition logic to SavingTasks state (process_prd_step) after tasks are saved. Reads config.json for model settings, iterates through saved tasks checking complexity >= 7, creates RigPRDParserAdapter, calls decompose_task() with PRD raw_content, saves generated sub-tasks, updates parent task with subtask_ids and Decomposed status. Non-fatal error handling with eprintln warnings - decomposition failures don't block task save completion. ReloadingTasks state will fetch all tasks including sub-tasks for hierarchical display in Kanban.
+//! - 2025-11-27T10:00:00Z @AI: Implement hierarchical task display in TUI Kanban board. Added HierarchicalTask struct and build_hierarchical_task_list() helper function to organize tasks into parent-child relationships. Created get_tree_indicator() to generate box-drawing tree prefixes (├─ for intermediate children, └─ for last child). Modified all 5 Kanban columns (TODO, IN PROGRESS, COMPLETED, ARCHIVED, ERRORED) to use hierarchical rendering with proper indentation and tree indicators. Sub-tasks now appear indented beneath their parent tasks with visual tree connectors, matching terminal tree visualization conventions.
 //! - 2025-11-27T05:00:00Z @AI: Fix conversation scroll for wrapped text. Implemented manual text wrapping for long messages to accurately count visual lines before rendering. When message content exceeds available width, split into chunks and create separate Line objects with proper indentation for continuation lines. This ensures scroll offset calculation includes wrapped lines, preventing scroll lag when long validation messages or LLM responses appear. Removed reliance on Paragraph's automatic wrapping which happened after scroll calculation.
 //! - 2025-11-27T04:00:00Z @AI: Add comprehensive test for validation red row functionality. Created test_validation_red_row_functionality() that validates: (1) validation messages are stored in PartialTask.validation_messages vec, (2) task status transitions to Validating when remediation starts, (3) multiple validation messages accumulate correctly, (4) validation boxes appear in conversation with proper formatting. Test simulates complete validation workflow from assignee mismatch through LLM remediation success.
 //! - 2025-11-27T03:45:00Z @AI: Render validation boxes in red in conversation view. Modified conversation rendering to detect "┌─ Validation" boxes and render them in red color instead of yellow. This provides visual consistency - validation messages appear in red in both the conversation (blue box) and task list (green box) sections, making remediation events easily identifiable.
@@ -511,6 +526,8 @@ struct App {
     prd_gen_input_active: bool,
     /// Interactive generation: Scroll position in conversation view
     prd_gen_scroll_offset: usize,
+    /// Interactive generation: Auto-scroll enabled (tracks if user scrolled up manually)
+    prd_gen_auto_scroll: bool,
     /// Interactive generation: Channel receiver for LLM updates
     prd_gen_receiver: std::option::Option<tokio::sync::mpsc::Receiver<task_orchestrator::adapters::rig_prd_parser_adapter::PRDGenUpdate>>,
     /// Interactive generation: Channel sender for user input
@@ -542,13 +559,51 @@ enum PRDGenStatus {
     Complete,
 }
 
+/// Sub-task information for nested rendering.
+#[derive(Debug, Clone)]
+struct SubTaskInfo {
+    title: String,
+    description: String,
+    assignee: std::option::Option<String>,
+    priority: std::option::Option<u8>,
+    complexity: std::option::Option<u8>,
+}
+
+/// Box content types for structured rendering.
+#[derive(Debug, Clone)]
+enum BoxContent {
+    /// Task box (yellow) with optional nested sub-tasks
+    Task {
+        title: String,
+        description: String,
+        assignee: std::option::Option<String>,
+        priority: std::option::Option<u8>,
+        complexity: std::option::Option<u8>,
+        subtasks: std::vec::Vec<SubTaskInfo>,
+    },
+    /// Validation box (red)
+    Validation {
+        task_title: String,
+        message: String,
+    },
+}
+
+/// Message content in the interactive PRD generation conversation.
+#[derive(Debug, Clone)]
+enum MessageContent {
+    /// Plain text message
+    Text(String),
+    /// Structured box (task, sub-task, or validation)
+    Box(BoxContent),
+}
+
 /// Message in the interactive PRD generation conversation.
 #[derive(Debug, Clone)]
 struct PRDGenMessage {
     /// Message sender role
     role: PRDGenRole,
-    /// Message content
-    content: String,
+    /// Message content (text or structured box)
+    content: MessageContent,
     /// When the message was created
     timestamp: chrono::DateTime<chrono::Utc>,
 }
@@ -866,6 +921,7 @@ impl App {
             prd_gen_status: PRDGenStatus::Idle,
             prd_gen_input_active: false,
             prd_gen_scroll_offset: 0,
+            prd_gen_auto_scroll: true,
             prd_gen_receiver: std::option::Option::None,
             prd_gen_sender: std::option::Option::None,
             prd_gen_last_message: String::new(),
@@ -1871,7 +1927,7 @@ impl App {
                             // Add initial system message
                             self.prd_gen_conversation.push(PRDGenMessage {
                                 role: PRDGenRole::System,
-                                content: String::from("🚀 Starting interactive task generation..."),
+                                content: MessageContent::Text(String::from("🚀 Starting interactive task generation...")),
                                 timestamp: chrono::Utc::now(),
                             });
 
@@ -1903,20 +1959,29 @@ impl App {
                                         // Always create a new message for these
                                         self.prd_gen_conversation.push(PRDGenMessage {
                                             role: PRDGenRole::System,
-                                            content: msg,
+                                            content: MessageContent::Text(msg),
                                             timestamp: chrono::Utc::now(),
                                         });
                                     } else {
-                                        // Append to last message if it's an Assistant message, otherwise create new
+                                        // Append to last message if it's an Assistant message and Text content, otherwise create new
                                         if let Some(last_msg) = self.prd_gen_conversation.last_mut() {
                                             if matches!(last_msg.role, PRDGenRole::Assistant) {
-                                                // Append to existing message
-                                                last_msg.content.push_str(&msg);
+                                                // Try to append to existing text content
+                                                if let MessageContent::Text(ref mut text) = last_msg.content {
+                                                    text.push_str(&msg);
+                                                } else {
+                                                    // Last message is a box, create new text message
+                                                    self.prd_gen_conversation.push(PRDGenMessage {
+                                                        role: PRDGenRole::Assistant,
+                                                        content: MessageContent::Text(msg),
+                                                        timestamp: chrono::Utc::now(),
+                                                    });
+                                                }
                                             } else {
                                                 // Create new message
                                                 self.prd_gen_conversation.push(PRDGenMessage {
                                                     role: PRDGenRole::Assistant,
-                                                    content: msg,
+                                                    content: MessageContent::Text(msg),
                                                     timestamp: chrono::Utc::now(),
                                                 });
                                             }
@@ -1924,32 +1989,32 @@ impl App {
                                             // First message
                                             self.prd_gen_conversation.push(PRDGenMessage {
                                                 role: PRDGenRole::Assistant,
-                                                content: msg,
+                                                content: MessageContent::Text(msg),
                                                 timestamp: chrono::Utc::now(),
                                             });
                                         }
                                     }
 
-                                    // Auto-scroll to bottom
-                                    if self.prd_gen_conversation.len() > 15 {
-                                        self.prd_gen_scroll_offset = self.prd_gen_conversation.len().saturating_sub(15);
+                                    // Auto-scroll to keep showing latest content if enabled
+                                    if self.prd_gen_auto_scroll {
+                                        self.prd_gen_scroll_offset = self.prd_gen_conversation.len().saturating_sub(1);
                                     }
                                 }
                                 PRDGenUpdate::Question(question) => {
                                     self.prd_gen_status = PRDGenStatus::WaitingForInput;
                                     self.prd_gen_conversation.push(PRDGenMessage {
                                         role: PRDGenRole::Assistant,
-                                        content: std::format!("❓ {}", question),
+                                        content: MessageContent::Text(std::format!("❓ {}", question)),
                                         timestamp: chrono::Utc::now(),
                                     });
                                     self.prd_gen_input_active = true; // Focus input field
 
-                                    // Auto-scroll to bottom
-                                    if self.prd_gen_conversation.len() > 15 {
-                                        self.prd_gen_scroll_offset = self.prd_gen_conversation.len().saturating_sub(15);
+                                    // Auto-scroll to keep showing latest content if enabled
+                                    if self.prd_gen_auto_scroll {
+                                        self.prd_gen_scroll_offset = self.prd_gen_conversation.len().saturating_sub(1);
                                     }
                                 }
-                                PRDGenUpdate::TaskGenerated { title, description } => {
+                                PRDGenUpdate::TaskGenerated { title, description, assignee, priority, complexity } => {
                                     self.prd_gen_status = PRDGenStatus::Generating;
                                     self.prd_gen_partial_tasks.push(PartialTask {
                                         title: title.clone(),
@@ -1957,43 +2022,23 @@ impl App {
                                         validation_messages: std::vec::Vec::new(),
                                     });
 
-                                    // Add formatted task box to conversation
-                                    // Format description with pipe prefix for multi-line content
-                                    let formatted_desc = if description.is_empty() {
-                                        std::string::String::from("(none)")
-                                    } else {
-                                        // Split by newlines and add pipe prefix to each line
-                                        description
-                                            .lines()
-                                            .map(|line| {
-                                                if line.is_empty() {
-                                                    std::string::String::from("│")
-                                                } else {
-                                                    std::format!("│ {}", line)
-                                                }
-                                            })
-                                            .collect::<std::vec::Vec<_>>()
-                                            .join("\n")
-                                    };
-
-                                    let task_box = std::format!(
-                                        "┌─ Task Generated ─────────────────────────────\n\
-                                         │ Title: {}\n\
-                                         {}\n\
-                                         └──────────────────────────────────────────────",
-                                        title,
-                                        formatted_desc
-                                    );
-
+                                    // Add structured task box to conversation
                                     self.prd_gen_conversation.push(PRDGenMessage {
                                         role: PRDGenRole::System,
-                                        content: task_box,
+                                        content: MessageContent::Box(BoxContent::Task {
+                                            title: title.clone(),
+                                            description: description.clone(),
+                                            assignee,
+                                            priority,
+                                            complexity,
+                                            subtasks: std::vec::Vec::new(),
+                                        }),
                                         timestamp: chrono::Utc::now(),
                                     });
 
-                                    // Auto-scroll to bottom
-                                    if self.prd_gen_conversation.len() > 15 {
-                                        self.prd_gen_scroll_offset = self.prd_gen_conversation.len().saturating_sub(15);
+                                    // Auto-scroll to keep showing latest content if enabled
+                                    if self.prd_gen_auto_scroll {
+                                        self.prd_gen_scroll_offset = self.prd_gen_conversation.len().saturating_sub(1);
                                     }
                                 }
                                 PRDGenUpdate::ValidationInfo { task_title, message } => {
@@ -2004,32 +2049,26 @@ impl App {
                                         task.validation_messages.push(message.clone());
                                     }
 
-                                    // Add formatted validation box to conversation
-                                    let validation_box = std::format!(
-                                        "┌─ Validation ─────────────────────────────────\n\
-                                         │ Task: {}\n\
-                                         │ {}\n\
-                                         └──────────────────────────────────────────────",
-                                        task_title,
-                                        message
-                                    );
-
+                                    // Add structured validation box to conversation
                                     self.prd_gen_conversation.push(PRDGenMessage {
                                         role: PRDGenRole::System,
-                                        content: validation_box,
+                                        content: MessageContent::Box(BoxContent::Validation {
+                                            task_title: task_title.clone(),
+                                            message: message.clone(),
+                                        }),
                                         timestamp: chrono::Utc::now(),
                                     });
 
-                                    // Auto-scroll to bottom
-                                    if self.prd_gen_conversation.len() > 15 {
-                                        self.prd_gen_scroll_offset = self.prd_gen_conversation.len().saturating_sub(15);
+                                    // Auto-scroll to keep showing latest content if enabled
+                                    if self.prd_gen_auto_scroll {
+                                        self.prd_gen_scroll_offset = self.prd_gen_conversation.len().saturating_sub(1);
                                     }
                                 }
                                 PRDGenUpdate::Complete(tasks) => {
                                     self.prd_gen_status = PRDGenStatus::Complete;
                                     self.prd_gen_conversation.push(PRDGenMessage {
                                         role: PRDGenRole::System,
-                                        content: std::format!("✅ Generated {} tasks successfully!", tasks.len()),
+                                        content: MessageContent::Text(std::format!("✅ Generated {} tasks successfully!", tasks.len())),
                                         timestamp: chrono::Utc::now(),
                                     });
 
@@ -2215,6 +2254,75 @@ impl App {
                             error: std::format!("Failed to save task: {:?}", e),
                         };
                         return false;
+                    }
+                }
+
+                // Auto-decompose complex tasks (complexity >= 7)
+                let config_path = current_dir.join(".rigger/config.json");
+                if let Ok(config_content) = std::fs::read_to_string(&config_path) {
+                    if let Ok(config) = serde_json::from_str::<serde_json::Value>(&config_content) {
+                        let model_name = config["model"]["main"]
+                            .as_str()
+                            .unwrap_or("llama3.2:latest");
+                        let fallback_model = config["task_tools"]["fallback"]["model"]
+                            .as_str()
+                            .unwrap_or(model_name);
+
+                        for task in &tasks {
+                            if let std::option::Option::Some(complexity) = task.complexity {
+                                if complexity >= 7 {
+                                    // Create parser for decomposition
+                                    let parser = task_orchestrator::adapters::rig_prd_parser_adapter::RigPRDParserAdapter::new(
+                                        model_name.to_string(),
+                                        fallback_model.to_string(),
+                                        std::vec::Vec::new(), // Personas already validated
+                                    );
+
+                                    match parser.decompose_task(task, &prd.raw_content).await {
+                                        std::result::Result::Ok(generated_subtasks) => {
+                                            // Find parent task in conversation and add subtasks to it
+                                            for msg in self.prd_gen_conversation.iter_mut().rev() {
+                                                if let MessageContent::Box(BoxContent::Task {
+                                                    ref title,
+                                                    ref mut subtasks,
+                                                    ..
+                                                }) = msg.content {
+                                                    if title == &task.title {
+                                                        // Append all generated subtasks to parent task
+                                                        for subtask in &generated_subtasks {
+                                                            subtasks.push(SubTaskInfo {
+                                                                title: subtask.title.clone(),
+                                                                description: subtask.description.clone(),
+                                                                assignee: subtask.assignee.clone(),
+                                                                priority: std::option::Option::None,
+                                                                complexity: subtask.complexity,
+                                                            });
+
+                                                            // Save subtask to database
+                                                            if let Err(e) = adapter.save_async(subtask.clone()).await {
+                                                                eprintln!("Warning: Failed to save subtask: {}", e);
+                                                            }
+                                                        }
+                                                        break; // Found and updated parent task
+                                                    }
+                                                }
+                                            }
+
+                                            // Update parent task with subtask IDs and Decomposed status
+                                            let mut updated_parent = task.clone();
+                                            updated_parent.subtask_ids = generated_subtasks.iter().map(|st| st.id.clone()).collect();
+                                            updated_parent.status = task_manager::domain::task_status::TaskStatus::Decomposed;
+                                            if let Err(e) = adapter.save_async(updated_parent).await {
+                                                eprintln!("Warning: Failed to update parent task: {}", e);
+                                            }
+                                        }
+                                        std::result::Result::Err(e) => {
+                                            eprintln!("Warning: Decomposition failed for '{}': {}", task.title, e);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -4040,7 +4148,7 @@ async fn run_app<B: ratatui::backend::Backend>(
                                     // Add to conversation
                                     let user_message = PRDGenMessage {
                                         role: PRDGenRole::User,
-                                        content: message_content.clone(),
+                                        content: MessageContent::Text(message_content.clone()),
                                         timestamp: chrono::Utc::now(),
                                     };
                                     app.prd_gen_conversation.push(user_message);
@@ -4051,14 +4159,14 @@ async fn run_app<B: ratatui::backend::Backend>(
                                             // Channel full or closed - add error message
                                             app.prd_gen_conversation.push(PRDGenMessage {
                                                 role: PRDGenRole::System,
-                                                content: std::format!("⚠️ Failed to send message: {}", e),
+                                                content: MessageContent::Text(std::format!("⚠️ Failed to send message: {}", e)),
                                                 timestamp: chrono::Utc::now(),
                                             });
                                         } else {
                                             // Successfully sent - show confirmation
                                             app.prd_gen_conversation.push(PRDGenMessage {
                                                 role: PRDGenRole::System,
-                                                content: String::from("💬 Message sent to LLM..."),
+                                                content: MessageContent::Text(String::from("💬 Message sent to LLM...")),
                                                 timestamp: chrono::Utc::now(),
                                             });
                                         }
@@ -4072,10 +4180,9 @@ async fn run_app<B: ratatui::backend::Backend>(
                                     app.prd_gen_input.clear();
                                     app.prd_gen_input_active = false;
 
-                                    // Auto-scroll to bottom
-                                    if app.prd_gen_conversation.len() > 15 {
-                                        app.prd_gen_scroll_offset = app.prd_gen_conversation.len().saturating_sub(15);
-                                    }
+                                    // Auto-scroll to bottom and re-enable auto-scroll
+                                    app.prd_gen_scroll_offset = app.prd_gen_conversation.len().saturating_sub(1);
+                                    app.prd_gen_auto_scroll = true;
                                 }
                             }
                             KeyCode::Esc => {
@@ -4096,15 +4203,48 @@ async fn run_app<B: ratatui::backend::Backend>(
                                     app.prd_gen_editing_last = true;
                                     app.prd_gen_input_active = true;
                                 } else {
-                                    // Otherwise scroll conversation up
+                                    // Otherwise scroll conversation up and disable auto-scroll
                                     app.prd_gen_scroll_offset = app.prd_gen_scroll_offset.saturating_sub(1);
+                                    app.prd_gen_auto_scroll = false;
                                 }
                             }
                             KeyCode::Down => {
-                                // Scroll conversation down
-                                if app.prd_gen_scroll_offset < app.prd_gen_conversation.len().saturating_sub(15) {
+                                // Scroll conversation down (allow scrolling to end)
+                                let max_offset = app.prd_gen_conversation.len().saturating_sub(1);
+                                if app.prd_gen_scroll_offset < max_offset {
                                     app.prd_gen_scroll_offset += 1;
+                                    // Re-enable auto-scroll if we reached the bottom
+                                    if app.prd_gen_scroll_offset >= max_offset {
+                                        app.prd_gen_auto_scroll = true;
+                                    }
                                 }
+                            }
+                            KeyCode::PageUp => {
+                                // Scroll up by ~5 messages for faster navigation
+                                app.prd_gen_scroll_offset = app.prd_gen_scroll_offset.saturating_sub(5);
+                                app.prd_gen_auto_scroll = false;
+                            }
+                            KeyCode::PageDown => {
+                                // Scroll down by ~5 messages for faster navigation
+                                let max_offset = app.prd_gen_conversation.len().saturating_sub(1);
+                                app.prd_gen_scroll_offset = std::cmp::min(
+                                    app.prd_gen_scroll_offset.saturating_add(5),
+                                    max_offset
+                                );
+                                // Re-enable auto-scroll if we reached the bottom
+                                if app.prd_gen_scroll_offset >= max_offset {
+                                    app.prd_gen_auto_scroll = true;
+                                }
+                            }
+                            KeyCode::Home => {
+                                // Jump to top of conversation
+                                app.prd_gen_scroll_offset = 0;
+                                app.prd_gen_auto_scroll = false;
+                            }
+                            KeyCode::End => {
+                                // Jump to bottom of conversation and re-enable auto-scroll
+                                app.prd_gen_scroll_offset = app.prd_gen_conversation.len().saturating_sub(1);
+                                app.prd_gen_auto_scroll = true;
                             }
                             _ => {}
                         }
@@ -4880,7 +5020,7 @@ fn render_navigation_panel(f: &mut Frame, area: Rect, app: &App) {
 
     let mut items = std::vec![
         Line::from(Span::styled(
-            "PROJECTS",
+            " PROJECTS",
             Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
         )),
     ];
@@ -4948,7 +5088,7 @@ fn render_navigation_panel(f: &mut Frame, area: Rect, app: &App) {
 
     items.push(Line::from(""));
     items.push(Line::from(Span::styled(
-        "TOOLS",
+        " TOOLS",
         Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
     )));
 
@@ -4972,7 +5112,7 @@ fn render_navigation_panel(f: &mut Frame, area: Rect, app: &App) {
     items.push(Line::from(""));
     items.push(Line::from(""));
     items.push(Line::from(Span::styled(
-        "SHORTCUTS",
+        " SHORTCUTS",
         Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD)
     )));
     items.push(Line::from(vec![
@@ -5432,7 +5572,7 @@ fn render_sqlite_browser(f: &mut Frame, area: Rect, app: &App) {
 fn render_config_viewer(f: &mut Frame, area: Rect, _app: &App) {
     let mut lines = std::vec![
         Line::from(Span::styled(
-            "⚙️  Rigger Configuration",
+            " ⚙️  Rigger Configuration",
             Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
         )),
         Line::from(""),
@@ -5445,7 +5585,7 @@ fn render_config_viewer(f: &mut Frame, area: Rect, _app: &App) {
 
     // Display configuration information
     lines.push(Line::from(Span::styled(
-        "📁 Directory Configuration:",
+        " 📁 Directory Configuration:",
         Style::default().fg(Color::Yellow)
     )));
     lines.push(Line::from(""));
@@ -5471,7 +5611,7 @@ fn render_config_viewer(f: &mut Frame, area: Rect, _app: &App) {
     lines.push(Line::from(""));
 
     lines.push(Line::from(Span::styled(
-        "🗄️  Database Configuration:",
+        " 🗄️  Database Configuration:",
         Style::default().fg(Color::Yellow)
     )));
     lines.push(Line::from(""));
@@ -5499,7 +5639,7 @@ fn render_config_viewer(f: &mut Frame, area: Rect, _app: &App) {
     let config_json_path = rigger_dir.join("config.json");
 
     lines.push(Line::from(Span::styled(
-        "🔧 Task Tool Slots:",
+        " 🔧 Task Tool Slots:",
         Style::default().fg(Color::Yellow)
     )));
     lines.push(Line::from(""));
@@ -6173,11 +6313,15 @@ fn render_task_board(f: &mut Frame, area: Rect, app: &App) {
 
     // Render TODO column
     let is_todo_selected = app.selected_column == KanbanColumn::Todo;
-    let todo_items: std::vec::Vec<ListItem> = todo_tasks
+
+    // Build hierarchical task list (parents with indented children)
+    let hierarchical_todo = build_hierarchical_task_list(&todo_tasks);
+
+    let todo_items: std::vec::Vec<ListItem> = hierarchical_todo
         .iter()
         .enumerate()
-        .map(|(i, task)| {
-            let age_days = calculate_task_age_days(task);
+        .map(|(i, htask)| {
+            let age_days = calculate_task_age_days(htask.task);
             let (age_icon, age_color) = get_age_indicator(age_days);
 
             // Highlight selected task in selected column
@@ -6208,8 +6352,14 @@ fn render_task_board(f: &mut Frame, area: Rect, app: &App) {
                 Style::default().fg(Color::DarkGray)
             };
 
-            // Create multi-line card
-            let title_text = std::format!("│ {}{}", age_icon, truncate_string(&task.title, 22));
+            // Get tree indicator for hierarchical display
+            let tree_prefix = get_tree_indicator(htask.depth, htask.is_last_child);
+
+            // Calculate available width: 22 total - tree_prefix length - age_icon length
+            let available_width = 22 - tree_prefix.chars().count() - age_icon.chars().count();
+
+            // Create multi-line card with tree indicator
+            let title_text = std::format!("│ {}{}{}", tree_prefix, age_icon, truncate_string(&htask.task.title, available_width));
             let lines = vec![
                 Line::from(Span::styled(card_top, border_style)),
                 Line::from(Span::styled(title_text, title_style)),
@@ -6231,11 +6381,15 @@ fn render_task_board(f: &mut Frame, area: Rect, app: &App) {
 
     // Render IN PROGRESS column
     let is_progress_selected = app.selected_column == KanbanColumn::InProgress;
-    let progress_items: std::vec::Vec<ListItem> = in_progress_tasks
+
+    // Build hierarchical task list (parents with indented children)
+    let hierarchical_progress = build_hierarchical_task_list(&in_progress_tasks);
+
+    let progress_items: std::vec::Vec<ListItem> = hierarchical_progress
         .iter()
         .enumerate()
-        .map(|(i, task)| {
-            let age_days = calculate_task_age_days(task);
+        .map(|(i, htask)| {
+            let age_days = calculate_task_age_days(htask.task);
             let (age_icon, age_color) = get_age_indicator(age_days);
 
             let is_selected = is_progress_selected && i == app.selected_task_in_column;
@@ -6264,7 +6418,13 @@ fn render_task_board(f: &mut Frame, area: Rect, app: &App) {
                 Style::default().fg(Color::DarkGray)
             };
 
-            let title_text = std::format!("│ {}{}", age_icon, truncate_string(&task.title, 22));
+            // Get tree indicator for hierarchical display
+            let tree_prefix = get_tree_indicator(htask.depth, htask.is_last_child);
+
+            // Calculate available width: 22 total - tree_prefix length - age_icon length
+            let available_width = 22 - tree_prefix.chars().count() - age_icon.chars().count();
+
+            let title_text = std::format!("│ {}{}{}", tree_prefix, age_icon, truncate_string(&htask.task.title, available_width));
             let lines = vec![
                 Line::from(Span::styled(card_top, border_style)),
                 Line::from(Span::styled(title_text, title_style)),
@@ -6286,11 +6446,15 @@ fn render_task_board(f: &mut Frame, area: Rect, app: &App) {
 
     // Render COMPLETED column
     let is_completed_selected = app.selected_column == KanbanColumn::Completed;
-    let completed_items: std::vec::Vec<ListItem> = completed_tasks
+
+    // Build hierarchical task list (parents with indented children)
+    let hierarchical_completed = build_hierarchical_task_list(&completed_tasks);
+
+    let completed_items: std::vec::Vec<ListItem> = hierarchical_completed
         .iter()
         .enumerate()
-        .map(|(i, task)| {
-            let age_days = calculate_task_age_days(task);
+        .map(|(i, htask)| {
+            let age_days = calculate_task_age_days(htask.task);
             let (age_icon, _age_color) = get_age_indicator(age_days);
 
             let is_selected = is_completed_selected && i == app.selected_task_in_column;
@@ -6319,7 +6483,13 @@ fn render_task_board(f: &mut Frame, area: Rect, app: &App) {
                 Style::default().fg(Color::DarkGray)
             };
 
-            let title_text = std::format!("│ {}{}", age_icon, truncate_string(&task.title, 22));
+            // Get tree indicator for hierarchical display
+            let tree_prefix = get_tree_indicator(htask.depth, htask.is_last_child);
+
+            // Calculate available width: 22 total - tree_prefix length - age_icon length
+            let available_width = 22 - tree_prefix.chars().count() - age_icon.chars().count();
+
+            let title_text = std::format!("│ {}{}{}", tree_prefix, age_icon, truncate_string(&htask.task.title, available_width));
             let lines = vec![
                 Line::from(Span::styled(card_top, border_style)),
                 Line::from(Span::styled(title_text, title_style)),
@@ -6350,10 +6520,14 @@ fn render_task_board(f: &mut Frame, area: Rect, app: &App) {
 
     // Render ARCHIVED section (top half of 4th column)
     let is_archived_selected = app.selected_column == KanbanColumn::Archived;
-    let archived_items: std::vec::Vec<ListItem> = archived_tasks
+
+    // Build hierarchical task list (parents with indented children)
+    let hierarchical_archived = build_hierarchical_task_list(&archived_tasks);
+
+    let archived_items: std::vec::Vec<ListItem> = hierarchical_archived
         .iter()
         .enumerate()
-        .map(|(i, task)| {
+        .map(|(i, htask)| {
             let is_selected = is_archived_selected && i == app.selected_task_in_column;
 
             let card_top = if is_selected { "┏━━━━━━━━━━━━━━━━━━" } else { "┌──────────────────" };
@@ -6371,7 +6545,13 @@ fn render_task_board(f: &mut Frame, area: Rect, app: &App) {
                 Style::default().fg(Color::DarkGray)
             };
 
-            let title_text = std::format!("│ {}", truncate_string(&task.title, 17));
+            // Get tree indicator for hierarchical display
+            let tree_prefix = get_tree_indicator(htask.depth, htask.is_last_child);
+
+            // Calculate available width: 17 total (narrower column) - tree_prefix length
+            let available_width = 17 - tree_prefix.chars().count();
+
+            let title_text = std::format!("│ {}{}", tree_prefix, truncate_string(&htask.task.title, available_width));
             let lines = vec![
                 Line::from(Span::styled(card_top, border_style)),
                 Line::from(Span::styled(title_text, title_style)),
@@ -6393,10 +6573,14 @@ fn render_task_board(f: &mut Frame, area: Rect, app: &App) {
 
     // Render ERRORED section (bottom half of 4th column)
     let is_errored_selected = app.selected_column == KanbanColumn::Errored;
-    let errored_items: std::vec::Vec<ListItem> = errored_tasks
+
+    // Build hierarchical task list (parents with indented children)
+    let hierarchical_errored = build_hierarchical_task_list(&errored_tasks);
+
+    let errored_items: std::vec::Vec<ListItem> = hierarchical_errored
         .iter()
         .enumerate()
-        .map(|(i, task)| {
+        .map(|(i, htask)| {
             let is_selected = is_errored_selected && i == app.selected_task_in_column;
 
             let card_top = if is_selected { "┏━━━━━━━━━━━━━━━━━━" } else { "┌──────────────────" };
@@ -6414,7 +6598,13 @@ fn render_task_board(f: &mut Frame, area: Rect, app: &App) {
                 Style::default().fg(Color::DarkGray)
             };
 
-            let title_text = std::format!("│ {}", truncate_string(&task.title, 17));
+            // Get tree indicator for hierarchical display
+            let tree_prefix = get_tree_indicator(htask.depth, htask.is_last_child);
+
+            // Calculate available width: 17 total (narrower column) - tree_prefix length
+            let available_width = 17 - tree_prefix.chars().count();
+
+            let title_text = std::format!("│ {}{}", tree_prefix, truncate_string(&htask.task.title, available_width));
             let lines = vec![
                 Line::from(Span::styled(card_top, border_style)),
                 Line::from(Span::styled(title_text, title_style)),
@@ -7936,6 +8126,89 @@ fn get_age_indicator(age_days: i64) -> (&'static str, Color) {
     }
 }
 
+/// Represents a task in a hierarchical display with depth information.
+///
+/// Used to render parent tasks followed by their indented sub-tasks in the Kanban view.
+struct HierarchicalTask<'a> {
+    task: &'a task_manager::domain::task::Task,
+    depth: usize,
+    is_last_child: bool,
+}
+
+/// Organizes tasks into a hierarchical list with parent-child relationships.
+///
+/// Returns a flat list where sub-tasks immediately follow their parent, with depth metadata
+/// for proper tree visualization. Parent tasks appear first, followed by their children.
+///
+/// # Algorithm
+/// 1. Separate tasks into parents (no parent_task_id) and children (has parent_task_id)
+/// 2. For each parent task:
+///    - Add parent at depth 0
+///    - Find and add all children at depth 1
+/// 3. Return flattened hierarchical list
+fn build_hierarchical_task_list<'a>(
+    tasks: &'a [&'a task_manager::domain::task::Task],
+) -> std::vec::Vec<HierarchicalTask<'a>> {
+    let mut result = std::vec::Vec::new();
+
+    // Separate parent tasks (no parent_task_id) from children
+    let (parent_tasks, child_tasks): (std::vec::Vec<&&task_manager::domain::task::Task>, std::vec::Vec<&&task_manager::domain::task::Task>) = tasks
+        .iter()
+        .partition(|t| t.parent_task_id.is_none());
+
+    // Build lookup map for children by parent_task_id
+    let mut children_by_parent: std::collections::HashMap<&str, std::vec::Vec<&task_manager::domain::task::Task>> =
+        std::collections::HashMap::new();
+
+    for child in child_tasks {
+        if let std::option::Option::Some(ref parent_id) = child.parent_task_id {
+            children_by_parent
+                .entry(parent_id.as_str())
+                .or_insert_with(std::vec::Vec::new)
+                .push(*child);
+        }
+    }
+
+    // Build hierarchical list: parent followed by its children
+    for parent in parent_tasks {
+        // Add parent at depth 0
+        result.push(HierarchicalTask {
+            task: *parent,
+            depth: 0,
+            is_last_child: false,
+        });
+
+        // Add children at depth 1
+        if let std::option::Option::Some(children) = children_by_parent.get(parent.id.as_str()) {
+            let child_count = children.len();
+            for (idx, child) in children.iter().enumerate() {
+                result.push(HierarchicalTask {
+                    task: child,
+                    depth: 1,
+                    is_last_child: idx == child_count - 1,
+                });
+            }
+        }
+    }
+
+    result
+}
+
+/// Returns the tree indicator prefix for a hierarchical task.
+///
+/// Returns appropriate box-drawing characters based on depth and position:
+/// - Depth 0 (parent): "" (no prefix)
+/// - Depth 1, not last: "├─ "
+/// - Depth 1, last child: "└─ "
+fn get_tree_indicator(depth: usize, is_last_child: bool) -> &'static str {
+    match depth {
+        0 => "",
+        1 if is_last_child => "└─ ",
+        1 => "├─ ",
+        _ => "   ", // Deeper nesting (future expansion)
+    }
+}
+
 /// Formats a detailed age description for a task (Phase 12).
 ///
 /// Returns a human-readable string describing task age and staleness level.
@@ -8649,127 +8922,302 @@ fn render_interactive_generation(f: &mut Frame, area: Rect, app: &App) {
         .split(area);
 
     // Section 1: Conversation History
-    let mut conversation_lines = std::vec![
-        Line::from(Span::styled(
-            "💭 LLM Conversation",
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-        )),
-        Line::from(""),
-    ];
-
-    // Show conversation messages with proper formatting
-    // Auto-scroll to bottom: always show the latest messages
-    let total_messages = app.prd_gen_conversation.len();
-    let max_visible = 15;
-    let visible_start = if total_messages > max_visible {
-        total_messages - max_visible
+    // Build header with project name if available
+    let conversation_header = if let std::option::Option::Some(ref prd) = app.prd_processing_prd {
+        std::format!("💭 LLM Conversation - {}", prd.title)
     } else {
-        0
+        std::string::String::from("💭 LLM Conversation")
     };
 
+    // Show conversation messages with scrolling support
+    let total_messages = app.prd_gen_conversation.len();
+
+    // Auto-scroll to bottom when new messages arrive (unless user has scrolled up)
     let visible_messages: std::vec::Vec<&PRDGenMessage> = app
         .prd_gen_conversation
         .iter()
-        .skip(visible_start)
-        .take(max_visible)
         .collect();
 
+    // Build list of messages with their types for dynamic layout
+    #[derive(Clone)]
+    enum MessageItem<'a> {
+        Text { lines: std::vec::Vec<Line<'a>>, timestamp: String, height: u16 },
+        Block { content: BoxContent, timestamp: String, height: u16 },
+    }
+
+    let mut message_items: std::vec::Vec<MessageItem> = std::vec::Vec::new();
+
     if visible_messages.is_empty() {
-        conversation_lines.push(Line::from(Span::styled(
-            "Waiting for LLM to start thinking...",
-            Style::default().fg(Color::DarkGray)
-        )));
+        message_items.push(MessageItem::Text {
+            lines: std::vec![
+                Line::from(Span::styled(
+                    "Waiting for LLM to start thinking...",
+                    Style::default().fg(Color::DarkGray)
+                ))
+            ],
+            timestamp: String::new(),
+            height: 1,
+        });
     } else {
-        for msg in visible_messages {
+        for msg in &visible_messages {
             let (icon, color) = match msg.role {
                 PRDGenRole::System => ("⚙️ ", Color::Yellow),
                 PRDGenRole::Assistant => ("🤖", Color::Cyan),
                 PRDGenRole::User => ("👤", Color::Green),
             };
 
-            // For System messages (like task boxes), render without timestamp to preserve formatting
-            if matches!(msg.role, PRDGenRole::System) && msg.content.contains("┌─") {
-                // Determine color based on box type
-                let box_color = if msg.content.contains("┌─ Validation") {
-                    Color::Red  // Validation boxes in red
-                } else {
-                    color  // Task boxes in yellow (System default)
-                };
+            match &msg.content {
+                MessageContent::Box(box_content) => {
+                    // Box message - will render as Block widget
+                    let timestamp = msg.timestamp.format("%H:%M:%S").to_string();
 
-                // Task/Validation box - split on newlines and render each line separately
-                for line_text in msg.content.lines() {
-                    conversation_lines.push(Line::from(Span::styled(line_text, Style::default().fg(box_color))));
-                }
-            } else {
-                // Regular message - show timestamp and manually wrap long content
-                let timestamp = msg.timestamp.format("%H:%M:%S").to_string();
-                let prefix = std::format!("{} [{}] ", icon, timestamp);
-                let prefix_len = prefix.len();
-
-                // Available width for content (subtract borders and prefix)
-                let available_width = chunks[0].width.saturating_sub(2 + prefix_len as u16) as usize;
-
-                if available_width > 0 && msg.content.len() > available_width {
-                    // Content needs wrapping - split into chunks
-                    let mut content_chars: std::vec::Vec<char> = msg.content.chars().collect();
-                    let mut offset = 0;
-
-                    while offset < content_chars.len() {
-                        let chunk_end = std::cmp::min(offset + available_width, content_chars.len());
-                        let chunk: std::string::String = content_chars[offset..chunk_end].iter().collect();
-
-                        if offset == 0 {
-                            // First line with prefix
-                            conversation_lines.push(Line::from(vec![
-                                Span::styled(std::format!("{} ", icon), Style::default().fg(color)),
-                                Span::styled(std::format!("[{}] ", timestamp), Style::default().fg(Color::DarkGray)),
-                                Span::styled(chunk.clone(), Style::default().fg(color)),
-                            ]));
-                        } else {
-                            // Continuation lines with indentation
-                            conversation_lines.push(Line::from(vec![
-                                Span::styled(" ".repeat(prefix_len), Style::default()),
-                                Span::styled(chunk.clone(), Style::default().fg(color)),
-                            ]));
+                    // Calculate height dynamically based on content
+                    let height = match box_content {
+                        BoxContent::Task { subtasks, .. } => {
+                            let base_height = 9; // Title, Assignee, Priority, Complexity, blank, Description, + borders/padding
+                            if subtasks.is_empty() {
+                                base_height
+                            } else {
+                                // Add header for subtasks section (blank + "Sub-tasks:" line)
+                                let subtasks_header = 2;
+                                // Each subtask: blank + numbered title + 4 field lines (assignee, priority, complexity, description)
+                                let per_subtask = 6;
+                                base_height + subtasks_header + (subtasks.len() as u16 * per_subtask)
+                            }
                         }
+                        BoxContent::Validation { .. } => 6, // Task + blank + message + borders
+                    };
 
-                        offset += available_width;
-                    }
-                } else {
-                    // Content fits on one line
-                    conversation_lines.push(Line::from(vec![
-                        Span::styled(std::format!("{} ", icon), Style::default().fg(color)),
-                        Span::styled(std::format!("[{}] ", timestamp), Style::default().fg(Color::DarkGray)),
-                        Span::styled(&msg.content, Style::default().fg(color)),
-                    ]));
+                    message_items.push(MessageItem::Block {
+                        content: box_content.clone(),
+                        timestamp,
+                        height,
+                    });
+                }
+                MessageContent::Text(text) => {
+                    // Text message - combine icon and text for proper wrapping
+                    let timestamp = msg.timestamp.format("%H:%M:%S").to_string();
+
+                    // Create single text string with icon prefix (allows wrapping)
+                    let full_text = std::format!("{} {}", icon, text);
+                    let text_lines = std::vec![
+                        Line::from(Span::styled(full_text.clone(), Style::default().fg(color)))
+                    ];
+
+                    // Estimate wrapped height based on text length and typical width
+                    // Assume ~100 chars per line as rough estimate for conversation width
+                    let estimated_wrapped_lines = (full_text.len() as f32 / 100.0).ceil() as u16;
+                    let text_height = std::cmp::max(1, estimated_wrapped_lines);
+
+                    message_items.push(MessageItem::Text {
+                        lines: text_lines,
+                        timestamp,
+                        height: text_height + 1, // +1 for title line
+                    });
                 }
             }
-            conversation_lines.push(Line::from(""));
         }
     }
 
-    // Calculate scroll position to show the latest content
-    // Now total_lines includes manually wrapped lines, so scroll calculation is accurate
-    let total_lines = conversation_lines.len();
-    let available_height = chunks[0].height.saturating_sub(2) as usize; // Subtract border height
-    let scroll_offset = if total_lines > available_height {
-        (total_lines - available_height) as u16
+    // Render outer conversation container with cyan border and title
+    let conversation_block = Block::default()
+        .borders(Borders::ALL)
+        .title(std::format!(" {} ", &conversation_header))
+        .border_style(Style::default().fg(Color::Cyan))
+        .style(Style::default().bg(Color::Black));
+
+    f.render_widget(conversation_block.clone(), chunks[0]);
+
+    // Get inner area for messages (inside the border)
+    let inner_area = conversation_block.inner(chunks[0]);
+
+    // Calculate scrolling window: show messages that fit starting from scroll position
+    let available_height = inner_area.height;
+
+    // Build list of cumulative heights to determine visible message range
+    let mut cumulative_heights = std::vec::Vec::new();
+    let mut running_total: u16 = 0;
+    for item in &message_items {
+        let item_height = match item {
+            MessageItem::Text { height, .. } => *height,
+            MessageItem::Block { height, .. } => *height,
+        };
+        running_total += item_height;
+        cumulative_heights.push(running_total);
+    }
+
+    // Calculate which messages to display
+    let start_idx = if app.prd_gen_auto_scroll && !message_items.is_empty() {
+        // Auto-scroll mode: calculate offset to show most recent messages that fit
+        // Work backwards from the end to find how many messages fit
+        let mut height_needed: u16 = 0;
+        let mut messages_that_fit = 0;
+
+        for item in message_items.iter().rev() {
+            let item_height = match item {
+                MessageItem::Text { height, .. } => *height,
+                MessageItem::Block { height, .. } => *height,
+            };
+
+            if height_needed + item_height <= available_height {
+                height_needed += item_height;
+                messages_that_fit += 1;
+            } else {
+                break;
+            }
+        }
+
+        // Start index is total messages minus how many fit
+        message_items.len().saturating_sub(messages_that_fit)
     } else {
-        0
+        // Manual scroll mode: use the scroll offset
+        app.prd_gen_scroll_offset.min(message_items.len().saturating_sub(1))
     };
 
-    let conversation_block = Paragraph::new(conversation_lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Conversation ")
-                .border_style(Style::default().fg(Color::Cyan))
-        )
-        .style(Style::default().bg(Color::Black))
-        .wrap(Wrap { trim: false })
-        .scroll((scroll_offset, 0)); // Scroll vertically to show latest content
+    // Collect visible messages starting from start_idx
+    let mut visible_items = std::vec::Vec::new();
+    let mut height_used: u16 = 0;
 
-    f.render_widget(conversation_block, chunks[0]);
+    for item in message_items.iter().skip(start_idx) {
+        let item_height = match item {
+            MessageItem::Text { height, .. } => *height,
+            MessageItem::Block { height, .. } => *height,
+        };
+
+        if height_used + item_height <= available_height {
+            visible_items.push(item.clone());
+            height_used += item_height;
+        } else {
+            break; // No more messages fit
+        }
+    }
+
+    // If no messages fit, show at least one (the one at scroll offset)
+    if visible_items.is_empty() && !message_items.is_empty() {
+        visible_items.push(message_items[start_idx].clone());
+    }
+
+    // Create dynamic vertical layout for visible messages
+    let message_constraints: std::vec::Vec<Constraint> = visible_items
+        .iter()
+        .map(|item| match item {
+            MessageItem::Text { height, .. } => Constraint::Length(*height),
+            MessageItem::Block { height, .. } => Constraint::Length(*height),
+        })
+        .collect();
+
+    // Split inner area vertically for each message
+    let message_areas = if message_constraints.is_empty() {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(&[Constraint::Min(0)])
+            .split(inner_area)
+    } else {
+        Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(&message_constraints[..])
+            .split(inner_area)
+    };
+
+    // Render each message in its allocated area
+    for (idx, item) in visible_items.iter().enumerate() {
+        if idx >= message_areas.len() {
+            break;
+        }
+
+        match item {
+            MessageItem::Text { lines, timestamp, .. } => {
+                // Render text as borderless block with timestamp label
+                let text_para = Paragraph::new(lines.clone())
+                    .block(
+                        Block::default()
+                            .borders(Borders::NONE)
+                            .title(std::format!(" {} ", timestamp))
+                            .title_style(Style::default().fg(Color::DarkGray))
+                    )
+                    .style(Style::default().bg(Color::Black))
+                    .wrap(Wrap { trim: true });
+                f.render_widget(text_para, message_areas[idx]);
+            }
+            MessageItem::Block { content, timestamp, .. } => {
+                // Render as Block widget with borders
+                match content {
+                    BoxContent::Task { title, description, assignee, priority, complexity, subtasks } => {
+                        let assignee_str = assignee.clone().unwrap_or_else(|| std::string::String::from("Unassigned"));
+                        let priority_str = priority.map(|p| std::format!("{}/10", p))
+                            .unwrap_or_else(|| std::string::String::from("N/A"));
+                        let complexity_str = complexity.map(|c| std::format!("{}/10", c))
+                            .unwrap_or_else(|| std::string::String::from("N/A"));
+
+                        let mut content_lines = std::vec![
+                            Line::from(std::format!("Title: {}", title)),
+                            Line::from(std::format!("Assignee: {}", assignee_str)),
+                            Line::from(std::format!("Priority: {}", priority_str)),
+                            Line::from(std::format!("Complexity: {}", complexity_str)),
+                            Line::from(""),
+                            Line::from(std::format!("Description: {}", description)),
+                        ];
+
+                        // Add nested sub-tasks if any
+                        if !subtasks.is_empty() {
+                            content_lines.push(Line::from(""));
+                            content_lines.push(Line::from(Span::styled(
+                                std::format!("Sub-tasks ({}):", subtasks.len()),
+                                Style::default().fg(Color::Rgb(255, 165, 0)).add_modifier(Modifier::BOLD)
+                            )));
+
+                            for (st_idx, subtask) in subtasks.iter().enumerate() {
+                                let st_assignee = subtask.assignee.clone().unwrap_or_else(|| std::string::String::from("Unassigned"));
+                                let st_priority = subtask.priority.map(|p| std::format!("{}/10", p))
+                                    .unwrap_or_else(|| std::string::String::from("N/A"));
+                                let st_complexity = subtask.complexity.map(|c| std::format!("{}/10", c))
+                                    .unwrap_or_else(|| std::string::String::from("N/A"));
+
+                                content_lines.push(Line::from(""));
+                                content_lines.push(Line::from(vec![
+                                    Span::styled(std::format!("  {}. ", st_idx + 1), Style::default().fg(Color::Rgb(255, 165, 0))),
+                                    Span::styled(&subtask.title, Style::default().fg(Color::Rgb(255, 165, 0)).add_modifier(Modifier::BOLD)),
+                                ]));
+                                content_lines.push(Line::from(std::format!("     Assignee: {}", st_assignee)));
+                                content_lines.push(Line::from(std::format!("     Priority: {}", st_priority)));
+                                content_lines.push(Line::from(std::format!("     Complexity: {}", st_complexity)));
+                                content_lines.push(Line::from(std::format!("     Description: {}", subtask.description)));
+                            }
+                        }
+
+                        let task_block = Paragraph::new(content_lines)
+                            .block(
+                                Block::default()
+                                    .borders(Borders::ALL)
+                                    .title(std::format!(" Task [{}] ", timestamp))
+                                    .border_style(Style::default().fg(Color::Yellow))
+                            )
+                            .wrap(Wrap { trim: true });
+
+                        f.render_widget(task_block, message_areas[idx]);
+                    }
+                    BoxContent::Validation { task_title, message } => {
+                        let content_lines = std::vec![
+                            Line::from(std::format!("Task: {}", task_title)),
+                            Line::from(""),
+                            Line::from(message.as_str()),
+                        ];
+
+                        let validation_block = Paragraph::new(content_lines)
+                            .block(
+                                Block::default()
+                                    .borders(Borders::ALL)
+                                    .title(std::format!(" Validation [{}] ", timestamp))
+                                    .border_style(Style::default().fg(Color::Red))
+                            )
+                            .wrap(Wrap { trim: true });
+
+                        f.render_widget(validation_block, message_areas[idx]);
+                    }
+                }
+            }
+        }
+    }
 
     // Section 2: Generated Tasks
     let mut task_lines = std::vec![
@@ -8906,10 +9354,17 @@ fn render_prd_processing(f: &mut Frame, area: Rect, app: &App) {
     let clear_widget = Block::default().style(Style::default().bg(Color::Black));
     f.render_widget(clear_widget, area);
 
+    // Build header with project name if available
+    let header_text = if let std::option::Option::Some(ref prd) = app.prd_processing_prd {
+        std::format!("📋 Processing PRD - {}", prd.title)
+    } else {
+        std::string::String::from("📋 Processing PRD")
+    };
+
     let mut lines = std::vec![
         Line::from(""),
         Line::from(Span::styled(
-            "📋 Processing PRD",
+            header_text,
             Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
         )),
         Line::from(""),

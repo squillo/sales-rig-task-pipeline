@@ -4,6 +4,11 @@
 //! actionable task lists via LLM-based decomposition.
 //!
 //! Revision History
+//! - 2025-11-28T00:40:00Z @AI: Add Priority field to PRDGenUpdate::TaskGenerated event. Extended TaskGenerated variant to include assignee, priority, and complexity as separate optional fields instead of embedding them in description string. Updated streaming code to extract these fields directly from task JSON (with field aliases: priority/prio/importance, complexity/estimated_complexity/difficulty, assignee/assigned_to/owner/responsible). This enables TUI to display structured task information in proper key:value format rather than parsing embedded text.
+//! - 2025-11-28T00:15:00Z @AI: Add precise JSON error diagnostics with line:col reporting. Created extract_json_error_diagnostics() helper that captures serde_json::Error line/column information and displays 5-line context window with error marker. Enhanced remediate_json_with_llm() to extract error diagnostics before LLM remediation and include them in the remediation prompt under ERROR DIAGNOSTICS section, giving the LLM precise information about where and what the parse failure is. Updated final failure message to show diagnostics instead of just first 1500 chars. Remediation now targets specific error locations rather than blindly attempting fixes.
+//! - 2025-11-27T15:00:00Z @AI: Enhance decomposition prompt with concrete example and clearer instructions. Added EXAMPLE FORMAT section showing two complete sub-task JSON objects to guide llama3.2:latest. Clarified that sub-tasks should have complexity 1-5 (simpler than parent). Added numbered CRITICAL INSTRUCTIONS for explicit guidance: no markdown, start with [, end with ], 3-5 tasks total. Changed complexity from 1-10 to 1-5 scale for sub-tasks to emphasize they should be simpler units of work. This addresses issue where LLM wasn't generating sub-tasks due to unclear formatting expectations.
+//! - 2025-11-27T08:00:00Z @AI: Add task decomposition workflow. Implemented decompose_task() method that uses LLM to break complex tasks into 3-5 sub-tasks. Created build_decomposition_prompt() that provides parent task context, PRD snippet, and persona list to guide sub-task generation. Added parse_subtasks_from_json() that sets parent_task_id linkage and maintains PRD association. Sub-tasks inherit PRD context and have lower default complexity (3 vs 5). This enables hierarchical task breakdown for complex work items (complexity >= 7).
+//! - 2025-11-27T05:30:00Z @AI: Enhance system prompt to require detailed task descriptions. Added DESCRIPTION REQUIREMENTS section with 4-part structure: WHAT (features/components), WHY (business value), HOW (implementation approach), ACCEPTANCE (success criteria). Included concrete good/bad examples showing detailed vs. vague descriptions. Updated both persona and non-persona prompts with detailed authentication system example (JWT, bcrypt, rate limiting, endpoints). This guides llama3.2:latest to generate actionable, thorough task descriptions instead of shallow summaries.
 //! - 2025-11-27T05:15:00Z @AI: Simplify remediation start messages for immediate feedback. Changed assignee remediation message from "Assignee '{}' not found, attempting LLM remediation..." to simple "Remediating assignee..." and JSON remediation from "Initial JSON parse failed: {}. Attempting remediation with {}..." to "Remediating JSON...". Shorter messages appear faster in red validation rows, providing immediate visual feedback that remediation has started instead of appearing locked up during long LLM calls.
 //! - 2025-11-27T04:45:00Z @AI: Remove all eprintln! debug logging from validate_assignee(). Replaced debug logging with ValidationInfo messages for: LLM remediation failures, fallback persona usage. Removed verbose logging for exact/case-insensitive/fuzzy matches (no messages needed for successful matches). All assignee validation feedback now properly streams through ValidationInfo channel to appear in red validation boxes instead of leaking to stderr.
 //! - 2025-11-27T04:30:00Z @AI: Add ValidationInfo streaming for JSON remediation. Send ValidationInfo messages when JSON parsing fails and remediation begins, and when remediation succeeds. Uses "JSON Parsing" as task_title since individual task titles aren't available yet at this stage. These messages now appear in red validation boxes in both the conversation and task list sections of the TUI, providing proper real-time feedback instead of being silently hidden.
@@ -42,7 +47,13 @@ pub enum PRDGenUpdate {
     /// LLM has a question that needs user input
     Question(String),
     /// A single task was generated (partial result)
-    TaskGenerated { title: String, description: String },
+    TaskGenerated {
+        title: String,
+        description: String,
+        assignee: std::option::Option<String>,
+        priority: std::option::Option<u8>,
+        complexity: std::option::Option<u8>,
+    },
     /// Assignee validation/remediation information
     ValidationInfo { task_title: String, message: String },
     /// All tasks generated successfully
@@ -278,39 +289,36 @@ impl RigPRDParserAdapter {
                                                                         .unwrap_or("")
                                                                         .to_string();
 
-                                                                    // Build formatted description with all fields
-                                                                    let mut full_desc = description.clone();
-
-                                                                    // Extract assignee for display
-                                                                    let assignee_display = task_obj.get("assignee")
+                                                                    // Extract assignee
+                                                                    let assignee = task_obj.get("assignee")
                                                                         .or_else(|| task_obj.get("assigned_to"))
                                                                         .or_else(|| task_obj.get("owner"))
                                                                         .or_else(|| task_obj.get("responsible"))
                                                                         .and_then(|a| a.as_str())
-                                                                        .unwrap_or("unassigned");
+                                                                        .map(|s| s.to_string());
 
-                                                                    if let std::option::Option::Some(priority) = task_obj.get("priority")
+                                                                    // Extract priority
+                                                                    let priority = task_obj.get("priority")
                                                                         .or_else(|| task_obj.get("prio"))
-                                                                        .and_then(|p| p.as_str())
-                                                                    {
-                                                                        full_desc.push_str(&std::format!("\nPriority: {}", priority));
-                                                                    }
+                                                                        .or_else(|| task_obj.get("importance"))
+                                                                        .and_then(|p| p.as_u64())
+                                                                        .map(|p| p as u8);
 
-                                                                    if let std::option::Option::Some(complexity) = task_obj.get("estimated_complexity")
+                                                                    // Extract complexity
+                                                                    let complexity = task_obj.get("estimated_complexity")
                                                                         .or_else(|| task_obj.get("complexity"))
+                                                                        .or_else(|| task_obj.get("difficulty"))
                                                                         .and_then(|c| c.as_u64())
-                                                                    {
-                                                                        full_desc.push_str(&std::format!("\nComplexity: {}/10", complexity));
-                                                                    }
+                                                                        .map(|c| c as u8);
 
-                                                                    // Add assignee to display
-                                                                    full_desc.push_str(&std::format!("\nAssignee: {}", assignee_display));
-
-                                                                    // Send TaskGenerated update
+                                                                    // Send TaskGenerated update with all fields
                                                                     let _ = update_tx
                                                                         .send(PRDGenUpdate::TaskGenerated {
                                                                             title: title.to_string(),
-                                                                            description: full_desc,
+                                                                            description: description.clone(),
+                                                                            assignee,
+                                                                            priority,
+                                                                            complexity,
                                                                         })
                                                                         .await;
                                                                 }
@@ -393,20 +401,40 @@ impl RigPRDParserAdapter {
 
             prompt.push_str("Each task object must have exactly these 5 fields:\n\
             - \"title\": string (concise task title, max 100 chars)\n\
-            - \"description\": string (detailed description, max 500 chars)\n\
+            - \"description\": string (DETAILED description - see requirements below)\n\
             - \"priority\": string (must be exactly \"high\", \"medium\", or \"low\")\n\
             - \"estimated_complexity\": number (integer 1-10, where 10 is most complex)\n\
             - \"assignee\": string (persona name from the list above, or \"unassigned\")\n\n\
+            DESCRIPTION REQUIREMENTS (CRITICAL - read carefully):\n\
+            Descriptions must be thorough and actionable. Each description MUST include:\n\
+            1. WHAT: What needs to be built/implemented (specific features, components, or outcomes)\n\
+            2. WHY: Why this task matters (business value, technical dependency, or user benefit)\n\
+            3. HOW: Implementation approach or key steps (technologies, patterns, or methods)\n\
+            4. ACCEPTANCE: Clear success criteria (how to verify the task is complete)\n\n\
+            GOOD DESCRIPTION EXAMPLE:\n\
+            \"Create a RESTful API authentication system using JWT tokens. This provides secure user access control for the platform. Implement POST /auth/login endpoint that validates credentials against the database, generates a JWT with 24-hour expiration, and returns it with user metadata. Include bcrypt password hashing and rate limiting (5 attempts per minute). Success criteria: Users can login, receive valid JWT, and subsequent API calls authenticate successfully using the token.\"\n\n\
+            BAD DESCRIPTION EXAMPLE (too vague - DO NOT do this):\n\
+            \"Create REST API with authentication\"\n\n\
             EXAMPLE RESPONSE (copy this format exactly):\n\
-            [{\"title\":\"Setup Rust project\",\"description\":\"Initialize Cargo workspace with required dependencies\",\"priority\":\"high\",\"estimated_complexity\":3,\"assignee\":\"Alice\"},{\"title\":\"Implement API endpoints\",\"description\":\"Create REST API with authentication\",\"priority\":\"high\",\"estimated_complexity\":7,\"assignee\":\"Bob\"}]\n\n");
+            [{\"title\":\"Setup authentication system\",\"description\":\"Create a RESTful API authentication system using JWT tokens. This provides secure user access control for the platform. Implement POST /auth/login endpoint that validates credentials against the database, generates a JWT with 24-hour expiration, and returns it with user metadata. Include bcrypt password hashing and rate limiting (5 attempts per minute). Success criteria: Users can login, receive valid JWT, and subsequent API calls authenticate successfully using the token.\",\"priority\":\"high\",\"estimated_complexity\":7,\"assignee\":\"Alice\"}]\n\n");
         } else {
             prompt.push_str("Each task object must have exactly these 4 fields:\n\
             - \"title\": string (concise task title, max 100 chars)\n\
-            - \"description\": string (detailed description, max 500 chars)\n\
+            - \"description\": string (DETAILED description - see requirements below)\n\
             - \"priority\": string (must be exactly \"high\", \"medium\", or \"low\")\n\
             - \"estimated_complexity\": number (integer 1-10, where 10 is most complex)\n\n\
+            DESCRIPTION REQUIREMENTS (CRITICAL - read carefully):\n\
+            Descriptions must be thorough and actionable. Each description MUST include:\n\
+            1. WHAT: What needs to be built/implemented (specific features, components, or outcomes)\n\
+            2. WHY: Why this task matters (business value, technical dependency, or user benefit)\n\
+            3. HOW: Implementation approach or key steps (technologies, patterns, or methods)\n\
+            4. ACCEPTANCE: Clear success criteria (how to verify the task is complete)\n\n\
+            GOOD DESCRIPTION EXAMPLE:\n\
+            \"Create a RESTful API authentication system using JWT tokens. This provides secure user access control for the platform. Implement POST /auth/login endpoint that validates credentials against the database, generates a JWT with 24-hour expiration, and returns it with user metadata. Include bcrypt password hashing and rate limiting (5 attempts per minute). Success criteria: Users can login, receive valid JWT, and subsequent API calls authenticate successfully using the token.\"\n\n\
+            BAD DESCRIPTION EXAMPLE (too vague - DO NOT do this):\n\
+            \"Create REST API with authentication\"\n\n\
             EXAMPLE RESPONSE (copy this format exactly):\n\
-            [{\"title\":\"Setup Rust project\",\"description\":\"Initialize Cargo workspace with required dependencies\",\"priority\":\"high\",\"estimated_complexity\":3},{\"title\":\"Implement API endpoints\",\"description\":\"Create REST API with authentication\",\"priority\":\"high\",\"estimated_complexity\":7}]\n\n");
+            [{\"title\":\"Setup authentication system\",\"description\":\"Create a RESTful API authentication system using JWT tokens. This provides secure user access control for the platform. Implement POST /auth/login endpoint that validates credentials against the database, generates a JWT with 24-hour expiration, and returns it with user metadata. Include bcrypt password hashing and rate limiting (5 attempts per minute). Success criteria: Users can login, receive valid JWT, and subsequent API calls authenticate successfully using the token.\",\"priority\":\"high\",\"estimated_complexity\":7}]\n\n");
         }
 
         prompt.push_str("DO NOT:\n\
@@ -628,16 +656,19 @@ impl RigPRDParserAdapter {
             log.push_str("  ✓ Applied syntax fixes\n");
         }
 
-        // Step 3: Try parsing after cleanup
+        // Step 3: Try parsing after cleanup and extract error diagnostics
         log.push_str("→ Step 3: Test parse after cleanup\n");
         if let std::result::Result::Ok(_) = serde_json::from_str::<serde_json::Value>(&cleaned) {
             log.push_str("  ✓ SUCCESS: Cleanup alone fixed the JSON!\n");
             return std::result::Result::Ok((cleaned, log));
-        } else {
-            log.push_str("  ✗ Still invalid, attempting LLM remediation\n");
         }
 
-        // Step 4: LLM remediation
+        // Extract precise error diagnostics for the LLM
+        let error_diagnostics = Self::extract_json_error_diagnostics(&cleaned);
+        log.push_str(&std::format!("  ✗ Parse failed:\n{}\n", error_diagnostics));
+        log.push_str("  → Attempting LLM remediation with error diagnostics\n");
+
+        // Step 4: LLM remediation with precise error location
         log.push_str(&std::format!("→ Step 4: LLM remediation ({})\n", model_name));
 
         let remediation_prompt = std::format!(
@@ -648,8 +679,10 @@ impl RigPRDParserAdapter {
             - Use double quotes for strings\n\
             - No trailing commas\n\
             - All braces and brackets must be balanced\n\n\
+            ERROR DIAGNOSTICS:\n{}\n\n\
             Malformed input:\n{}\n\n\
             Fixed JSON:",
+            error_diagnostics,
             cleaned
         );
 
@@ -680,11 +713,110 @@ impl RigPRDParserAdapter {
             log.push_str("  ✓ SUCCESS: LLM remediation produced valid JSON!\n");
             std::result::Result::Ok((final_cleaned, log))
         } else {
-            log.push_str("  ✗ FAILED: LLM output still invalid\n");
-            log.push_str(&std::format!("\nRemediated output (first 200 chars):\n{}\n",
-                if final_cleaned.len() > 200 { &final_cleaned[0..200] } else { &final_cleaned }));
+            log.push_str("  ✗ FAILED: LLM output still invalid\n\n");
+
+            // Extract precise error diagnostics with line:col location
+            let diagnostics = Self::extract_json_error_diagnostics(&final_cleaned);
+            log.push_str(&diagnostics);
+            log.push_str("\n");
+
             std::result::Result::Err(log)
         }
+    }
+
+    /// Extracts precise JSON parsing error diagnostics including line, column, and context.
+    ///
+    /// This function attempts to parse JSON and captures detailed error information
+    /// including the exact line and column where parsing failed, along with a snippet
+    /// of the surrounding context to help identify the issue.
+    ///
+    /// # Arguments
+    ///
+    /// * `json_str` - The JSON string to parse and diagnose
+    ///
+    /// # Returns
+    ///
+    /// Returns a formatted diagnostic string containing:
+    /// - Error message
+    /// - Line and column number
+    /// - Context snippet showing the error location
+    fn extract_json_error_diagnostics(json_str: &str) -> String {
+        match serde_json::from_str::<serde_json::Value>(json_str) {
+            std::result::Result::Ok(_) => String::from("JSON is valid"),
+            std::result::Result::Err(e) => {
+                let line = e.line();
+                let col = e.column();
+
+                // Extract context around the error location
+                let lines: std::vec::Vec<&str> = json_str.lines().collect();
+                let mut context = String::new();
+
+                // Show 2 lines before and after the error, if available
+                let start_line = line.saturating_sub(3);
+                let end_line = std::cmp::min(line + 2, lines.len());
+
+                for (idx, line_text) in lines.iter().enumerate().skip(start_line).take(end_line - start_line) {
+                    let line_num = idx + 1;
+                    let marker = if line_num == line { ">>>" } else { "   " };
+                    context.push_str(&std::format!("{} {:4} | {}\n", marker, line_num, line_text));
+
+                    // Add column indicator on the error line
+                    if line_num == line {
+                        context.push_str(&std::format!("         {}^\n", " ".repeat(col.saturating_sub(1))));
+                    }
+                }
+
+                std::format!(
+                    "Parse error at line {}, column {}: {}\n\nContext:\n{}",
+                    line, col, e, context
+                )
+            }
+        }
+    }
+
+    /// Validates task description quality based on length and content depth.
+    /// Returns true if description meets quality standards, false if it needs improvement.
+    fn validate_description_quality(description: &str) -> bool {
+        // Minimum length requirement (100 characters for meaningful descriptions)
+        if description.len() < 100 {
+            return false;
+        }
+
+        // Check for presence of key indicators of depth
+        let desc_lower = description.to_lowercase();
+
+        // Count how many quality indicators are present
+        let mut quality_score = 0;
+
+        // Indicator 1: Has implementation details (technical terms, specifics)
+        let technical_keywords = [
+            "implement", "create", "build", "endpoint", "api", "database",
+            "authentication", "component", "function", "method", "class"
+        ];
+        if technical_keywords.iter().any(|keyword| desc_lower.contains(keyword)) {
+            quality_score += 1;
+        }
+
+        // Indicator 2: Has reasoning or context (why/because/provides/enables)
+        let reasoning_keywords = ["why", "because", "provides", "enables", "allows", "ensures"];
+        if reasoning_keywords.iter().any(|keyword| desc_lower.contains(keyword)) {
+            quality_score += 1;
+        }
+
+        // Indicator 3: Has success criteria or outcomes
+        let criteria_keywords = ["success", "criteria", "verify", "complete", "done", "should"];
+        if criteria_keywords.iter().any(|keyword| desc_lower.contains(keyword)) {
+            quality_score += 1;
+        }
+
+        // Indicator 4: Has multiple sentences (checks for at least 2 periods)
+        let sentence_count = description.matches('.').count();
+        if sentence_count >= 2 {
+            quality_score += 1;
+        }
+
+        // Description passes if it has at least 2 out of 4 quality indicators
+        quality_score >= 2
     }
 
     /// Validates and resolves assignee using three-tier strategy:
@@ -886,10 +1018,22 @@ impl RigPRDParserAdapter {
             ).ok_or_else(|| std::format!("Missing 'title' field in task at index {}", idx))?;
 
             // Extract description (optional)
-            let _description = Self::extract_string(
+            let description = Self::extract_string(
                 obj,
                 &["description", "desc", "details", "detail", "content"]
             ).unwrap_or_default();
+
+            // Validate description quality
+            let description_valid = Self::validate_description_quality(&description);
+            if !description_valid {
+                // Send validation warning (non-blocking - we still create the task)
+                if let std::option::Option::Some(tx) = update_tx {
+                    let _ = tx.send(PRDGenUpdate::ValidationInfo {
+                        task_title: title.clone(),
+                        message: std::format!("Warning: Description is too brief ({} chars, recommended 100+)", description.len()),
+                    }).await;
+                }
+            }
 
             // Extract priority (optional, default to "medium")
             let _priority = Self::extract_string(
@@ -898,7 +1042,7 @@ impl RigPRDParserAdapter {
             ).unwrap_or_else(|| String::from("medium"));
 
             // Extract complexity (optional, default to 5)
-            let _estimated_complexity = Self::extract_number(
+            let complexity = Self::extract_number(
                 obj,
                 &["estimated_complexity", "complexity", "difficulty", "effort", "score"]
             ).unwrap_or(5);
@@ -924,17 +1068,260 @@ impl RigPRDParserAdapter {
                 std::option::Option::None, // no transcript for PRD-generated tasks
             );
 
-            // Set PRD linkage
+            // Set PRD linkage and extracted fields
             task.source_prd_id = std::option::Option::Some(prd_id.to_string());
-
-            // TODO Phase 1: Store priority and description as proper Task fields
-            // For now, we just create the task with basic fields from the LLM response
-            // Priority: {priority}, Complexity: {_estimated_complexity}, Description: {description}
+            task.description = description;
+            task.complexity = std::option::Option::Some(complexity as u8);
 
             tasks.push(task);
         }
 
         std::result::Result::Ok(tasks)
+    }
+
+    /// Decomposes a complex task into 3-5 sub-tasks using LLM.
+    ///
+    /// This method analyzes a parent task and generates child sub-tasks that break down
+    /// the work into smaller, more manageable pieces. It updates the parent task's status
+    /// to Decomposed and sets up bidirectional parent-child linkages.
+    ///
+    /// # Arguments
+    ///
+    /// * `parent_task` - The task to decompose (must have complexity >= 7)
+    /// * `prd_content` - Original PRD content for context
+    ///
+    /// # Returns
+    ///
+    /// Vector of 3-5 sub-tasks linked to the parent, or error if decomposition fails
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use task_orchestrator::adapters::rig_prd_parser_adapter::RigPRDParserAdapter;
+    /// # use task_manager::domain::task::Task;
+    /// # async fn example(adapter: RigPRDParserAdapter, task: Task) {
+    /// let subtasks = adapter.decompose_task(&task, "PRD content...").await?;
+    /// # Ok::<(), std::string::String>(())
+    /// # }
+    /// ```
+    pub async fn decompose_task(
+        &self,
+        parent_task: &task_manager::domain::task::Task,
+        prd_content: &str,
+    ) -> std::result::Result<std::vec::Vec<task_manager::domain::task::Task>, std::string::String> {
+        // Build decomposition prompt
+        let prompt = Self::build_decomposition_prompt(parent_task, prd_content, &self.personas);
+
+        // Initialize Rig Ollama client
+        let client = rig::providers::ollama::Client::new();
+        let agent = client.agent(&self.model_name).build();
+
+        // Call LLM for decomposition
+        let response = rig::completion::Prompt::prompt(&agent, prompt.as_str())
+            .await
+            .map_err(|e| std::format!("LLM request failed: {}", e))?;
+
+        // Extract and parse JSON
+        let json_text = Self::extract_json_from_response(response.as_str())
+            .map_err(|e| std::format!("Failed to extract JSON from decomposition response: {}", e))?;
+        let subtasks = Self::parse_subtasks_from_json(
+            &json_text,
+            &parent_task.id,
+            parent_task.source_prd_id.as_deref().unwrap_or(""),
+            &self.fallback_model_name,
+            &self.personas,
+            std::option::Option::None, // No streaming for decomposition
+        )
+        .await?;
+
+        std::result::Result::Ok(subtasks)
+    }
+
+    /// Builds the LLM prompt for task decomposition.
+    ///
+    /// Creates a focused prompt that asks the LLM to break down a complex task
+    /// into 3-5 actionable sub-tasks, maintaining consistency with the original PRD context.
+    fn build_decomposition_prompt(
+        parent_task: &task_manager::domain::task::Task,
+        prd_content: &str,
+        personas: &[task_manager::domain::persona::Persona],
+    ) -> String {
+        let mut prompt = String::new();
+
+        // System instructions
+        prompt.push_str("You are a technical project planner. Your task is to decompose a complex task into 3-5 smaller, actionable sub-tasks.\n\n");
+
+        // Parent task context
+        prompt.push_str(&std::format!("PARENT TASK:\nTitle: {}\n", parent_task.title));
+        if !parent_task.description.is_empty() {
+            prompt.push_str(&std::format!("Description: {}\n", parent_task.description));
+        }
+        if let std::option::Option::Some(complexity) = parent_task.complexity {
+            prompt.push_str(&std::format!("Complexity: {}/10\n", complexity));
+        }
+        prompt.push_str("\n");
+
+        // PRD context (first 500 chars for context)
+        let prd_snippet = if prd_content.len() > 500 {
+            &prd_content[..500]
+        } else {
+            prd_content
+        };
+        prompt.push_str(&std::format!("PROJECT CONTEXT:\n{}\n\n", prd_snippet));
+
+        // Persona list
+        if !personas.is_empty() {
+            prompt.push_str("AVAILABLE PERSONAS:\n");
+            for persona in personas {
+                prompt.push_str(&std::format!("- {}\n", persona.name));
+            }
+            prompt.push_str("\n");
+        }
+
+        // Output format instructions with example
+        prompt.push_str("OUTPUT REQUIREMENTS:\n");
+        prompt.push_str("Decompose the parent task into 3-5 smaller sub-tasks that can be completed independently.\n");
+        prompt.push_str("Return a JSON array where each sub-task object has:\n");
+        prompt.push_str("- \"title\": string (concise, actionable sub-task title)\n");
+        prompt.push_str("- \"description\": string (detailed description with WHAT/WHY/HOW/ACCEPTANCE)\n");
+        prompt.push_str("- \"priority\": \"high\", \"medium\", or \"low\"\n");
+        prompt.push_str("- \"estimated_complexity\": number 1-5 (sub-tasks should be simpler than parent)\n");
+        prompt.push_str("- \"assignee\": persona name from available list, or \"unassigned\"\n\n");
+
+        prompt.push_str("EXAMPLE FORMAT:\n");
+        prompt.push_str("[\n");
+        prompt.push_str("  {\n");
+        prompt.push_str("    \"title\": \"Setup authentication middleware\",\n");
+        prompt.push_str("    \"description\": \"Configure JWT middleware to validate tokens on protected routes. This ensures secure API access.\",\n");
+        prompt.push_str("    \"priority\": \"high\",\n");
+        prompt.push_str("    \"estimated_complexity\": 3,\n");
+        prompt.push_str("    \"assignee\": \"Backend Developer\"\n");
+        prompt.push_str("  },\n");
+        prompt.push_str("  {\n");
+        prompt.push_str("    \"title\": \"Write authentication tests\",\n");
+        prompt.push_str("    \"description\": \"Create unit tests for login, logout, and token refresh flows.\",\n");
+        prompt.push_str("    \"priority\": \"medium\",\n");
+        prompt.push_str("    \"estimated_complexity\": 2,\n");
+        prompt.push_str("    \"assignee\": \"QA Engineer\"\n");
+        prompt.push_str("  }\n");
+        prompt.push_str("]\n\n");
+
+        prompt.push_str("CRITICAL INSTRUCTIONS:\n");
+        prompt.push_str("1. Respond with ONLY the JSON array - no markdown code blocks, no explanations\n");
+        prompt.push_str("2. Start your response with [ and end with ]\n");
+        prompt.push_str("3. Each sub-task must be completable independently\n");
+        prompt.push_str("4. Total of 3-5 sub-tasks (not more, not less)\n\n");
+
+        prompt.push_str("YOUR JSON RESPONSE:\n");
+
+        prompt
+    }
+
+    /// Parses sub-tasks from JSON response.
+    ///
+    /// Similar to parse_tasks_from_json but sets parent_task_id linkage.
+    async fn parse_subtasks_from_json(
+        json_text: &str,
+        parent_task_id: &str,
+        prd_id: &str,
+        fallback_model_name: &str,
+        personas: &[task_manager::domain::persona::Persona],
+        update_tx: std::option::Option<&tokio::sync::mpsc::Sender<PRDGenUpdate>>,
+    ) -> std::result::Result<std::vec::Vec<task_manager::domain::task::Task>, std::string::String> {
+        // Try parsing JSON directly first
+        let json_array: std::vec::Vec<serde_json::Value> = match serde_json::from_str(json_text) {
+            std::result::Result::Ok(arr) => arr,
+            std::result::Result::Err(e) => {
+                // Attempt JSON remediation
+                if let std::option::Option::Some(tx) = update_tx {
+                    let _ = tx.send(PRDGenUpdate::ValidationInfo {
+                        task_title: std::string::String::from("Sub-task Parsing"),
+                        message: std::string::String::from("Remediating JSON..."),
+                    });
+                }
+
+                let (remediated, _log) = Self::remediate_json_with_llm(json_text, fallback_model_name).await
+                    .map_err(|log| std::format!("Sub-task JSON remediation failed: {}\n\nOriginal error: {}", log, e))?;
+
+                serde_json::from_str(&remediated)
+                    .map_err(|e2| std::format!("Remediated JSON still invalid: {}", e2))?
+            }
+        };
+
+        let mut subtasks = std::vec::Vec::new();
+
+        for (idx, val) in json_array.iter().enumerate() {
+            let obj = match val.as_object() {
+                std::option::Option::Some(o) => o,
+                std::option::Option::None => continue, // Skip non-objects
+            };
+
+            // Extract title (required)
+            let title = Self::extract_string(
+                obj,
+                &["title", "task", "name", "summary"]
+            ).ok_or_else(|| std::format!("Missing 'title' field in sub-task at index {}", idx))?;
+
+            // Extract description
+            let description = Self::extract_string(
+                obj,
+                &["description", "desc", "details"]
+            ).unwrap_or_default();
+
+            // Extract complexity
+            let complexity = Self::extract_number(
+                obj,
+                &["estimated_complexity", "complexity", "difficulty"]
+            ).unwrap_or(3); // Default lower complexity for sub-tasks
+
+            // Extract and validate assignee
+            let llm_assignee = Self::extract_string(
+                obj,
+                &["assignee", "assigned_to", "owner"]
+            );
+            let validated_assignee = Self::validate_assignee(&title, llm_assignee.as_deref(), personas, fallback_model_name, update_tx).await;
+
+            // Create sub-task
+            let action_item = transcript_extractor::domain::action_item::ActionItem {
+                title,
+                assignee: validated_assignee,
+                due_date: std::option::Option::None,
+            };
+
+            let mut subtask = task_manager::domain::task::Task::from_action_item(
+                &action_item,
+                std::option::Option::None,
+            );
+
+            // Set linkages
+            subtask.source_prd_id = std::option::Option::Some(prd_id.to_string());
+            subtask.parent_task_id = std::option::Option::Some(parent_task_id.to_string());
+            subtask.description = description;
+            subtask.complexity = std::option::Option::Some(complexity as u8);
+
+            subtasks.push(subtask);
+        }
+
+        if subtasks.is_empty() {
+            return std::result::Result::Err(std::string::String::from("Decomposition produced no sub-tasks"));
+        }
+
+        std::result::Result::Ok(subtasks)
+    }
+
+    /// Returns the tree indicator prefix for a hierarchical task.
+    ///
+    /// Returns appropriate box-drawing characters based on depth and position:
+    /// - Depth 0 (parent): "" (no prefix)
+    /// - Depth 1, not last: "├─ "
+    /// - Depth 1, last child: "└─ "
+    pub fn get_tree_indicator(depth: usize, is_last_child: bool) -> &'static str {
+        match depth {
+            0 => "",
+            1 if is_last_child => "└─ ",
+            1 => "├─ ",
+            _ => "   ", // Deeper nesting (future expansion)
+        }
     }
 }
 
@@ -1206,5 +1593,195 @@ Hope this helps!"#;
         std::assert_eq!(tasks.len(), 1);
         std::assert_eq!(tasks[0].title, "Minimal task");
         std::assert_eq!(tasks[0].source_prd_id, std::option::Option::Some(std::string::String::from("prd-123")));
+    }
+
+    #[test]
+    fn test_build_decomposition_prompt_includes_parent_context() {
+        // Test: Validates decomposition prompt includes parent task details.
+        // Justification: LLM needs parent context to generate relevant sub-tasks.
+        let parent = task_manager::domain::task::Task {
+            id: std::string::String::from("task-123"),
+            title: std::string::String::from("Implement Authentication System"),
+            description: std::string::String::from("Build secure auth with JWT"),
+            status: task_manager::domain::task_status::TaskStatus::Todo,
+            complexity: std::option::Option::Some(8),
+            assignee: std::option::Option::Some(std::string::String::from("Alice")),
+            parent_task_id: std::option::Option::None,
+            subtask_ids: std::vec::Vec::new(),
+            dependencies: std::vec::Vec::new(),
+            source_prd_id: std::option::Option::Some(std::string::String::from("prd-123")),
+            due_date: std::option::Option::None,
+            source_transcript_id: std::option::Option::None,
+            enhancements: std::option::Option::None,
+            comprehension_tests: std::option::Option::None,
+            reasoning: std::option::Option::None,
+            completion_summary: std::option::Option::None,
+            context_files: std::vec::Vec::new(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+
+        let prd_content = "# Test PRD\n\nBuild an authentication system with JWT tokens and OAuth support.";
+        let personas = std::vec::Vec::new();
+
+        let prompt = super::RigPRDParserAdapter::build_decomposition_prompt(&parent, prd_content, &personas);
+
+        // Verify prompt contains key elements
+        std::assert!(prompt.contains("Implement Authentication System"), "Missing parent title");
+        std::assert!(prompt.contains("Complexity: 8/10"), "Missing complexity");
+        std::assert!(prompt.contains("PROJECT CONTEXT"), "Missing PRD context");
+        std::assert!(prompt.contains("OUTPUT REQUIREMENTS"), "Missing output format");
+        std::assert!(prompt.contains("3-5 sub-task objects"), "Missing sub-task count");
+    }
+
+    #[test]
+    fn test_get_tree_indicator_returns_correct_prefixes() {
+        // Test: Validates tree indicators match depth and position.
+        // Justification: Correct tree visualization requires proper box-drawing characters.
+
+        // Parent at depth 0
+        std::assert_eq!(super::RigPRDParserAdapter::get_tree_indicator(0, false), "");
+        std::assert_eq!(super::RigPRDParserAdapter::get_tree_indicator(0, true), "");
+
+        // First child at depth 1 (not last)
+        std::assert_eq!(super::RigPRDParserAdapter::get_tree_indicator(1, false), "├─ ");
+
+        // Last child at depth 1
+        std::assert_eq!(super::RigPRDParserAdapter::get_tree_indicator(1, true), "└─ ");
+
+        // Deeper nesting (future expansion)
+        std::assert_eq!(super::RigPRDParserAdapter::get_tree_indicator(2, false), "   ");
+    }
+
+    #[tokio::test]
+    async fn test_parse_subtasks_from_json_sets_parent_linkage() {
+        // Test: Validates sub-tasks link to parent correctly.
+        // Justification: Parent-child relationship is core to task hierarchy.
+        let json = r#"[
+            {"title": "Sub-task 1", "description": "First sub-task", "estimated_complexity": 3},
+            {"title": "Sub-task 2", "description": "Second sub-task", "estimated_complexity": 4}
+        ]"#;
+
+        let subtasks = super::RigPRDParserAdapter::parse_subtasks_from_json(
+            json,
+            "parent-123",
+            "prd-456",
+            "llama3.2:latest",
+            &[],
+            std::option::Option::None,
+        ).await.unwrap();
+
+        std::assert_eq!(subtasks.len(), 2);
+
+        // Verify first sub-task
+        std::assert_eq!(subtasks[0].title, "Sub-task 1");
+        std::assert_eq!(subtasks[0].parent_task_id, std::option::Option::Some(std::string::String::from("parent-123")));
+        std::assert_eq!(subtasks[0].source_prd_id, std::option::Option::Some(std::string::String::from("prd-456")));
+        std::assert_eq!(subtasks[0].complexity, std::option::Option::Some(3));
+
+        // Verify second sub-task
+        std::assert_eq!(subtasks[1].title, "Sub-task 2");
+        std::assert_eq!(subtasks[1].parent_task_id, std::option::Option::Some(std::string::String::from("parent-123")));
+        std::assert_eq!(subtasks[1].complexity, std::option::Option::Some(4));
+    }
+
+    #[tokio::test]
+    async fn test_parse_subtasks_uses_default_complexity() {
+        // Test: Validates sub-tasks without complexity get default value.
+        // Justification: Sub-tasks should be less complex than parent (default 3).
+        let json = r#"[{"title": "Simple sub-task"}]"#;
+
+        let subtasks = super::RigPRDParserAdapter::parse_subtasks_from_json(
+            json,
+            "parent-123",
+            "prd-456",
+            "llama3.2:latest",
+            &[],
+            std::option::Option::None,
+        ).await.unwrap();
+
+        std::assert_eq!(subtasks.len(), 1);
+        std::assert_eq!(subtasks[0].complexity, std::option::Option::Some(3), "Default complexity should be 3");
+    }
+
+    #[tokio::test]
+    async fn test_parse_subtasks_rejects_empty_array() {
+        // Test: Validates parser rejects empty sub-task array.
+        // Justification: Decomposition should produce at least one sub-task.
+        let json = r#"[]"#;
+
+        let result = super::RigPRDParserAdapter::parse_subtasks_from_json(
+            json,
+            "parent-123",
+            "prd-456",
+            "llama3.2:latest",
+            &[],
+            std::option::Option::None,
+        ).await;
+
+        std::assert!(result.is_err());
+        std::assert!(result.unwrap_err().contains("no sub-tasks"), "Should mention no sub-tasks were produced");
+    }
+
+    #[test]
+    fn test_build_decomposition_prompt_includes_personas() {
+        // Test: Validates prompt lists available personas for assignee selection.
+        // Justification: Sub-tasks need to be assigned to valid personas.
+        let parent = task_manager::domain::task::Task {
+            id: std::string::String::from("task-123"),
+            title: std::string::String::from("Complex Task"),
+            description: std::string::String::from("Multi-step work"),
+            status: task_manager::domain::task_status::TaskStatus::Todo,
+            complexity: std::option::Option::Some(8),
+            assignee: std::option::Option::None,
+            parent_task_id: std::option::Option::None,
+            subtask_ids: std::vec::Vec::new(),
+            dependencies: std::vec::Vec::new(),
+            source_prd_id: std::option::Option::None,
+            due_date: std::option::Option::None,
+            source_transcript_id: std::option::Option::None,
+            enhancements: std::option::Option::None,
+            comprehension_tests: std::option::Option::None,
+            reasoning: std::option::Option::None,
+            completion_summary: std::option::Option::None,
+            context_files: std::vec::Vec::new(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+
+        let personas = std::vec![
+            task_manager::domain::persona::Persona {
+                id: std::string::String::from("p1"),
+                project_id: std::option::Option::Some(std::string::String::from("proj1")),
+                name: std::string::String::from("Backend Developer"),
+                role: std::string::String::from("Developer"),
+                description: std::string::String::from("Handles backend tasks"),
+                llm_provider: std::option::Option::Some(std::string::String::from("ollama")),
+                llm_model: std::option::Option::Some(std::string::String::from("llama3.2:latest")),
+                is_default: true,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                enabled_tools: std::vec::Vec::new(),
+            },
+            task_manager::domain::persona::Persona {
+                id: std::string::String::from("p2"),
+                project_id: std::option::Option::Some(std::string::String::from("proj1")),
+                name: std::string::String::from("Frontend Developer"),
+                role: std::string::String::from("Developer"),
+                description: std::string::String::from("Handles UI tasks"),
+                llm_provider: std::option::Option::Some(std::string::String::from("ollama")),
+                llm_model: std::option::Option::Some(std::string::String::from("llama3.2:latest")),
+                is_default: false,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                enabled_tools: std::vec::Vec::new(),
+            },
+        ];
+
+        let prompt = super::RigPRDParserAdapter::build_decomposition_prompt(&parent, "PRD content", &personas);
+
+        std::assert!(prompt.contains("AVAILABLE PERSONAS"), "Missing personas section");
+        std::assert!(prompt.contains("Backend Developer"), "Missing first persona");
+        std::assert!(prompt.contains("Frontend Developer"), "Missing second persona");
     }
 }
