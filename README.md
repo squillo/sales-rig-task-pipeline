@@ -635,7 +635,9 @@ git push origin feature/add-new-adapter
 **Status**: Production-ready for local use
 
 **Completed Features**:
-- ✅ CLI with all commands (init, parse, list, do)
+- ✅ CLI with all commands (init, parse, list, do, artifacts)
+- ✅ RAG (Retrieval-Augmented Generation) with embedded sqlite-vec extension
+- ✅ Vector similarity search across knowledge artifacts
 - ✅ gRPC server with 8/10 RPCs functional
 - ✅ MCP server (stdio JSON-RPC 2.0)
 - ✅ Task orchestration (enhancement + comprehension testing)

@@ -4,6 +4,11 @@
 //! actionable task lists via LLM-based decomposition.
 //!
 //! Revision History
+//! - 2025-11-30T22:00:00Z @AI: Implement two-pass persona assignment. Removed personas entirely from PRD parsing prompt (build_system_prompt now ignores personas parameter) to prevent biasing simpler LLMs into creating tasks FOR personas rather than FROM PRD content. Created assign_persona_to_task() method that uses LLM in a second pass to assign appropriate persona based on generated task's title/description. Personas list shown to LLM only during assignment pass, not during task generation. This allows organic task derivation from PRD requirements without persona influence.
+//! - 2025-11-30T21:15:00Z @AI: Simplify persona prompt to avoid biasing LLM. Previous prompt listed each persona with role and description, causing LLM to create tasks for each persona rather than deriving tasks from PRD content. Changed to minimal "ASSIGNEE OPTIONS: Name1, Name2, ... or Default Agent" format. LLM now focuses on PRD requirements and just picks an assignee from the list.
+//! - 2025-11-29T17:30:00Z @AI: Replace specific authentication example with abstract placeholders in prompts. The JWT/auth example was biasing LLM outputs toward auth-related tasks regardless of PRD content. Changed to SOTA few-shot approach: DESCRIPTION TEMPLATE with labeled sections [WHAT], [WHY], [HOW], [ACCEPTANCE], and RESPONSE FORMAT using <placeholders> for fields. LLM now generates tasks from PRD content without domain bias from concrete examples.
+//! - 2025-11-29T15:00:00Z @AI: Rename assignee to agent_persona in LLM prompts and JSON extraction. Field name "assignee" caused LLMs to default to placeholder human names (Alice, Bob). New name primes LLM to produce role-based outputs (Backend Developer, Security Analyst). Updated: prompt field descriptions, example JSON responses, and JSON extraction alias lists (agent_persona now first, old names kept as fallbacks for backward compatibility).
+//! - 2025-11-28T22:00:00Z @AI: Add RAG context injection into task generation prompts (Phase 5 Task 5.2). Added optional embedding_port and artifact_repository dependencies to RigPRDParserAdapter struct. Created retrieve_rag_context() method that searches for relevant artifacts based on PRD objectives and title. Modified build_prompt() to inject RAG context section before PRD content when artifacts are found. Added new() variant that accepts RAG dependencies and separate new_without_rag() for backward compatibility. Prompts now include "RELEVANT CONTEXT FROM KNOWLEDGE BASE:" section with up to 3 most similar artifacts to improve task generation quality.
 //! - 2025-11-28T00:40:00Z @AI: Add Priority field to PRDGenUpdate::TaskGenerated event. Extended TaskGenerated variant to include assignee, priority, and complexity as separate optional fields instead of embedding them in description string. Updated streaming code to extract these fields directly from task JSON (with field aliases: priority/prio/importance, complexity/estimated_complexity/difficulty, assignee/assigned_to/owner/responsible). This enables TUI to display structured task information in proper key:value format rather than parsing embedded text.
 //! - 2025-11-28T00:15:00Z @AI: Add precise JSON error diagnostics with line:col reporting. Created extract_json_error_diagnostics() helper that captures serde_json::Error line/column information and displays 5-line context window with error marker. Enhanced remediate_json_with_llm() to extract error diagnostics before LLM remediation and include them in the remediation prompt under ERROR DIAGNOSTICS section, giving the LLM precise information about where and what the parse failure is. Updated final failure message to show diagnostics instead of just first 1500 chars. Remediation now targets specific error locations rather than blindly attempting fixes.
 //! - 2025-11-27T15:00:00Z @AI: Enhance decomposition prompt with concrete example and clearer instructions. Added EXAMPLE FORMAT section showing two complete sub-task JSON objects to guide llama3.2:latest. Clarified that sub-tasks should have complexity 1-5 (simpler than parent). Added numbered CRITICAL INSTRUCTIONS for explicit guidance: no markdown, start with [, end with ], 3-5 tasks total. Changed complexity from 1-10 to 1-5 scale for sub-tasks to emphasize they should be simpler units of work. This addresses issue where LLM wasn't generating sub-tasks due to unclear formatting expectations.
@@ -76,11 +81,14 @@ pub enum PRDGenUpdate {
 /// let adapter = RigPRDParserAdapter::new(std::string::String::from("llama3.1"));
 /// # }
 /// ```
-#[derive(hexser::HexAdapter)]
+#[derive(hexser::HexAdapter, Clone)]
 pub struct RigPRDParserAdapter {
     model_name: String,
     fallback_model_name: String,
     personas: std::vec::Vec<task_manager::domain::persona::Persona>,
+    embedding_port: std::option::Option<std::sync::Arc<dyn crate::ports::embedding_port::EmbeddingPort + std::marker::Send + std::marker::Sync>>,
+    artifact_repository: std::option::Option<std::sync::Arc<std::sync::Mutex<dyn task_manager::ports::artifact_repository_port::ArtifactRepositoryPort + std::marker::Send>>>,
+    project_id: std::option::Option<std::string::String>,
 }
 
 impl RigPRDParserAdapter {
@@ -109,7 +117,64 @@ impl RigPRDParserAdapter {
     ///
     /// The Ollama server URL defaults to http://localhost:11434
     pub fn new(model_name: String, fallback_model_name: String, personas: std::vec::Vec<task_manager::domain::persona::Persona>) -> Self {
-        Self { model_name, fallback_model_name, personas }
+        Self {
+            model_name,
+            fallback_model_name,
+            personas,
+            embedding_port: std::option::Option::None,
+            artifact_repository: std::option::Option::None,
+            project_id: std::option::Option::None,
+        }
+    }
+
+    /// Creates a new RigPRDParserAdapter with RAG context retrieval capabilities.
+    ///
+    /// This constructor enables the adapter to inject relevant artifacts from the
+    /// knowledge base into task generation prompts, improving context awareness.
+    ///
+    /// # Arguments
+    ///
+    /// * `model_name` - Name of the primary Ollama model
+    /// * `fallback_model_name` - Name of the fallback model for remediation
+    /// * `personas` - List of available personas for task assignment
+    /// * `embedding_port` - Port for generating query embeddings
+    /// * `artifact_repository` - Repository for artifact similarity search
+    /// * `project_id` - Optional project ID to scope artifact search
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use task_orchestrator::adapters::rig_prd_parser_adapter::RigPRDParserAdapter;
+    /// # async fn example(
+    /// #     embedding_port: std::sync::Arc<dyn task_orchestrator::ports::embedding_port::EmbeddingPort + Send + Sync>,
+    /// #     artifact_repo: std::sync::Arc<std::sync::Mutex<dyn task_manager::ports::artifact_repository_port::ArtifactRepositoryPort + Send>>,
+    /// # ) {
+    /// let adapter = RigPRDParserAdapter::new_with_rag(
+    ///     String::from("llama3.2:latest"),
+    ///     String::from("llama3.2:latest"),
+    ///     std::vec::Vec::new(),
+    ///     embedding_port,
+    ///     artifact_repo,
+    ///     std::option::Option::Some(String::from("project-123")),
+    /// );
+    /// # }
+    /// ```
+    pub fn new_with_rag(
+        model_name: String,
+        fallback_model_name: String,
+        personas: std::vec::Vec<task_manager::domain::persona::Persona>,
+        embedding_port: std::sync::Arc<dyn crate::ports::embedding_port::EmbeddingPort + std::marker::Send + std::marker::Sync>,
+        artifact_repository: std::sync::Arc<std::sync::Mutex<dyn task_manager::ports::artifact_repository_port::ArtifactRepositoryPort + std::marker::Send>>,
+        project_id: std::option::Option<std::string::String>,
+    ) -> Self {
+        Self {
+            model_name,
+            fallback_model_name,
+            personas,
+            embedding_port: std::option::Option::Some(embedding_port),
+            artifact_repository: std::option::Option::Some(artifact_repository),
+            project_id,
+        }
     }
 
     /// Parses a PRD interactively with real-time streaming updates.
@@ -173,6 +238,7 @@ impl RigPRDParserAdapter {
         let (update_tx, update_rx) = tokio::sync::mpsc::channel::<PRDGenUpdate>(100);
         let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<String>(10);
 
+        let adapter = self.clone();
         let model_name = self.model_name.clone();
         let fallback_model_name = self.fallback_model_name.clone();
         let personas = self.personas.clone();
@@ -187,7 +253,7 @@ impl RigPRDParserAdapter {
                 .await;
 
             // Build the prompt
-            let prompt = Self::build_prompt(&prd, &personas);
+            let prompt = adapter.build_prompt(&prd, &personas).await;
 
             let _ = update_tx
                 .send(PRDGenUpdate::Thinking(
@@ -289,8 +355,9 @@ impl RigPRDParserAdapter {
                                                                         .unwrap_or("")
                                                                         .to_string();
 
-                                                                    // Extract assignee
-                                                                    let assignee = task_obj.get("assignee")
+                                                                    // Extract agent_persona (with fallback aliases)
+                                                                    let assignee = task_obj.get("agent_persona")
+                                                                        .or_else(|| task_obj.get("assignee"))
                                                                         .or_else(|| task_obj.get("assigned_to"))
                                                                         .or_else(|| task_obj.get("owner"))
                                                                         .or_else(|| task_obj.get("responsible"))
@@ -380,62 +447,30 @@ impl RigPRDParserAdapter {
     }
 
     /// Builds the system prompt for PRD parsing with persona information.
-    fn build_system_prompt(personas: &[task_manager::domain::persona::Persona]) -> std::string::String {
+    fn build_system_prompt(_personas: &[task_manager::domain::persona::Persona]) -> std::string::String {
+        // Personas are intentionally ignored - they're assigned in a second pass to avoid biasing task generation
         let mut prompt = std::string::String::from(
             "You are a project management assistant. Break down Product Requirements Documents into actionable tasks.\n\n\
             CRITICAL: You MUST respond with ONLY a valid JSON array. No other text.\n\n"
         );
 
-        // Add persona information if available
-        if !personas.is_empty() {
-            prompt.push_str("AVAILABLE TEAM MEMBERS (assign tasks to these personas):\n");
-            for persona in personas {
-                prompt.push_str(&std::format!(
-                    "- \"{}\": {} - {}\n",
-                    persona.name,
-                    persona.role,
-                    persona.description
-                ));
-            }
-            prompt.push_str("\n");
-
-            prompt.push_str("Each task object must have exactly these 5 fields:\n\
-            - \"title\": string (concise task title, max 100 chars)\n\
-            - \"description\": string (DETAILED description - see requirements below)\n\
-            - \"priority\": string (must be exactly \"high\", \"medium\", or \"low\")\n\
-            - \"estimated_complexity\": number (integer 1-10, where 10 is most complex)\n\
-            - \"assignee\": string (persona name from the list above, or \"unassigned\")\n\n\
-            DESCRIPTION REQUIREMENTS (CRITICAL - read carefully):\n\
-            Descriptions must be thorough and actionable. Each description MUST include:\n\
-            1. WHAT: What needs to be built/implemented (specific features, components, or outcomes)\n\
-            2. WHY: Why this task matters (business value, technical dependency, or user benefit)\n\
-            3. HOW: Implementation approach or key steps (technologies, patterns, or methods)\n\
-            4. ACCEPTANCE: Clear success criteria (how to verify the task is complete)\n\n\
-            GOOD DESCRIPTION EXAMPLE:\n\
-            \"Create a RESTful API authentication system using JWT tokens. This provides secure user access control for the platform. Implement POST /auth/login endpoint that validates credentials against the database, generates a JWT with 24-hour expiration, and returns it with user metadata. Include bcrypt password hashing and rate limiting (5 attempts per minute). Success criteria: Users can login, receive valid JWT, and subsequent API calls authenticate successfully using the token.\"\n\n\
-            BAD DESCRIPTION EXAMPLE (too vague - DO NOT do this):\n\
-            \"Create REST API with authentication\"\n\n\
-            EXAMPLE RESPONSE (copy this format exactly):\n\
-            [{\"title\":\"Setup authentication system\",\"description\":\"Create a RESTful API authentication system using JWT tokens. This provides secure user access control for the platform. Implement POST /auth/login endpoint that validates credentials against the database, generates a JWT with 24-hour expiration, and returns it with user metadata. Include bcrypt password hashing and rate limiting (5 attempts per minute). Success criteria: Users can login, receive valid JWT, and subsequent API calls authenticate successfully using the token.\",\"priority\":\"high\",\"estimated_complexity\":7,\"assignee\":\"Alice\"}]\n\n");
-        } else {
-            prompt.push_str("Each task object must have exactly these 4 fields:\n\
-            - \"title\": string (concise task title, max 100 chars)\n\
-            - \"description\": string (DETAILED description - see requirements below)\n\
-            - \"priority\": string (must be exactly \"high\", \"medium\", or \"low\")\n\
-            - \"estimated_complexity\": number (integer 1-10, where 10 is most complex)\n\n\
-            DESCRIPTION REQUIREMENTS (CRITICAL - read carefully):\n\
-            Descriptions must be thorough and actionable. Each description MUST include:\n\
-            1. WHAT: What needs to be built/implemented (specific features, components, or outcomes)\n\
-            2. WHY: Why this task matters (business value, technical dependency, or user benefit)\n\
-            3. HOW: Implementation approach or key steps (technologies, patterns, or methods)\n\
-            4. ACCEPTANCE: Clear success criteria (how to verify the task is complete)\n\n\
-            GOOD DESCRIPTION EXAMPLE:\n\
-            \"Create a RESTful API authentication system using JWT tokens. This provides secure user access control for the platform. Implement POST /auth/login endpoint that validates credentials against the database, generates a JWT with 24-hour expiration, and returns it with user metadata. Include bcrypt password hashing and rate limiting (5 attempts per minute). Success criteria: Users can login, receive valid JWT, and subsequent API calls authenticate successfully using the token.\"\n\n\
-            BAD DESCRIPTION EXAMPLE (too vague - DO NOT do this):\n\
-            \"Create REST API with authentication\"\n\n\
-            EXAMPLE RESPONSE (copy this format exactly):\n\
-            [{\"title\":\"Setup authentication system\",\"description\":\"Create a RESTful API authentication system using JWT tokens. This provides secure user access control for the platform. Implement POST /auth/login endpoint that validates credentials against the database, generates a JWT with 24-hour expiration, and returns it with user metadata. Include bcrypt password hashing and rate limiting (5 attempts per minute). Success criteria: Users can login, receive valid JWT, and subsequent API calls authenticate successfully using the token.\",\"priority\":\"high\",\"estimated_complexity\":7}]\n\n");
-        }
+        prompt.push_str("Each task object must have exactly these 4 fields:\n\
+        - \"title\": string (concise task title, max 100 chars)\n\
+        - \"description\": string (DETAILED description - see requirements below)\n\
+        - \"priority\": string (must be exactly \"high\", \"medium\", or \"low\")\n\
+        - \"estimated_complexity\": number (integer 1-10, where 10 is most complex)\n\n\
+        DESCRIPTION REQUIREMENTS (CRITICAL - read carefully):\n\
+        Descriptions must be thorough and actionable. Each description MUST include:\n\
+        1. WHAT: What needs to be built/implemented (specific features, components, or outcomes)\n\
+        2. WHY: Why this task matters (business value, technical dependency, or user benefit)\n\
+        3. HOW: Implementation approach or key steps (technologies, patterns, or methods)\n\
+        4. ACCEPTANCE: Clear success criteria (how to verify the task is complete)\n\n\
+        DESCRIPTION TEMPLATE:\n\
+        \"[WHAT: Specific deliverable]. [WHY: Business/technical reason]. [HOW: Key implementation steps using relevant technologies]. [ACCEPTANCE: Measurable success criteria].\"\n\n\
+        BAD DESCRIPTION (too vague - DO NOT do this):\n\
+        \"Implement the feature\" or \"Build the component\"\n\n\
+        RESPONSE FORMAT (use this exact JSON structure, replace <placeholders> with actual content from the PRD):\n\
+        [{\"title\":\"<verb> <specific component>\",\"description\":\"<what to build>. <why it matters>. <how to implement with specific steps>. Success criteria: <measurable outcomes>.\",\"priority\":\"<high|medium|low>\",\"estimated_complexity\":<1-10>}]\n\n");
 
         prompt.push_str("DO NOT:\n\
         - Add markdown code blocks\n\
@@ -508,10 +543,101 @@ impl RigPRDParserAdapter {
         ))
     }
 
+    /// Retrieves relevant artifacts from the knowledge base for RAG context.
+    ///
+    /// Searches for artifacts related to the PRD's title and objectives using
+    /// semantic similarity. Returns formatted context string if artifacts are found.
+    ///
+    /// # Arguments
+    ///
+    /// * `prd` - The PRD to search context for
+    ///
+    /// # Returns
+    ///
+    /// Returns a formatted string with relevant artifacts, or empty string if:
+    /// - RAG dependencies are not configured
+    /// - No relevant artifacts are found
+    /// - Search fails
+    async fn retrieve_rag_context(&self, prd: &task_manager::domain::prd::PRD) -> std::string::String {
+        // Early return if RAG not configured
+        let (embedding_port, artifact_repository) = match (&self.embedding_port, &self.artifact_repository) {
+            (std::option::Option::Some(e), std::option::Option::Some(a)) => (e, a),
+            _ => return std::string::String::new(),
+        };
+
+        // Build search query from PRD title and first 2 objectives
+        let mut query = prd.title.clone();
+        if !prd.objectives.is_empty() {
+            query.push_str(": ");
+            let obj_count = std::cmp::min(2, prd.objectives.len());
+            query.push_str(&prd.objectives[0..obj_count].join(", "));
+        }
+
+        // Generate embedding for query
+        let query_embedding = match embedding_port.generate_embedding(&query).await {
+            std::result::Result::Ok(emb) => emb,
+            std::result::Result::Err(e) => {
+                eprintln!("RAG: Failed to generate query embedding: {}", e);
+                return std::string::String::new();
+            }
+        };
+
+        // Search for similar artifacts (limit to 3 most relevant)
+        let repo = match artifact_repository.lock() {
+            std::result::Result::Ok(r) => r,
+            std::result::Result::Err(e) => {
+                eprintln!("RAG: Failed to acquire repository lock: {}", e);
+                return std::string::String::new();
+            }
+        };
+
+        let similar_artifacts = match repo.find_similar(
+            &query_embedding,
+            3,  // Limit to top 3 artifacts
+            std::option::Option::Some(0.6),  // Higher threshold for quality
+            self.project_id.clone(),
+        ) {
+            std::result::Result::Ok(artifacts) => artifacts,
+            std::result::Result::Err(e) => {
+                eprintln!("RAG: Failed to search artifacts: {}", e);
+                return std::string::String::new();
+            }
+        };
+
+        // Format artifacts into context string
+        if similar_artifacts.is_empty() {
+            return std::string::String::new();
+        }
+
+        let mut context = std::string::String::from("RELEVANT CONTEXT FROM KNOWLEDGE BASE:\n\n");
+        for (i, similar) in similar_artifacts.iter().enumerate() {
+            let artifact = &similar.artifact;
+            let similarity = (1.0 - similar.distance) * 100.0;
+
+            context.push_str(&std::format!(
+                "Context {}: [Similarity: {:.1}%] Source: {:?}\n{}\n\n",
+                i + 1,
+                similarity,
+                artifact.source_type,
+                artifact.content
+            ));
+        }
+
+        context.push_str("Use the above context to inform task generation when relevant.\n\n---\n\n");
+        context
+    }
+
     /// Builds the complete prompt from PRD content (system + user).
-    fn build_prompt(prd: &task_manager::domain::prd::PRD, personas: &[task_manager::domain::persona::Persona]) -> std::string::String {
+    async fn build_prompt(&self, prd: &task_manager::domain::prd::PRD, personas: &[task_manager::domain::persona::Persona]) -> std::string::String {
+        // Retrieve RAG context if available
+        let rag_context = self.retrieve_rag_context(prd).await;
         let mut prompt = Self::build_system_prompt(personas);
         prompt.push_str("\n\n");
+
+        // Inject RAG context before PRD content if available
+        if !rag_context.is_empty() {
+            prompt.push_str(&rag_context);
+        }
 
         prompt.push_str(&std::format!("# PRD: {}\n\n", prd.title));
 
@@ -627,6 +753,25 @@ impl RigPRDParserAdapter {
 
         // Fix trailing commas
         cleaned = cleaned.replace(",]", "]").replace(",}", "}");
+
+        // Merge multiple separate JSON arrays (llama3.2 format issue)
+        // Pattern: ][  or ]\n[ becomes ,
+        let lines: std::vec::Vec<&str> = cleaned.lines().collect();
+        if lines.len() > 1 && lines.iter().all(|line| line.trim().starts_with('[') && line.trim().ends_with(']')) {
+            log.push_str("  ✓ Detected multiple arrays, merging\n");
+            let mut merged_items = std::vec::Vec::new();
+            for line in lines {
+                let trimmed = line.trim();
+                if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                    // Extract items from each array
+                    let inner = &trimmed[1..trimmed.len()-1];
+                    if !inner.trim().is_empty() {
+                        merged_items.push(inner);
+                    }
+                }
+            }
+            cleaned = std::format!("[{}]", merged_items.join(","));
+        }
 
         // Ensure proper array wrapper
         if !cleaned.starts_with('[') && cleaned.contains('{') {
@@ -1047,10 +1192,10 @@ impl RigPRDParserAdapter {
                 &["estimated_complexity", "complexity", "difficulty", "effort", "score"]
             ).unwrap_or(5);
 
-            // Extract assignee (optional)
+            // Extract agent_persona (optional, with fallback aliases)
             let llm_assignee = Self::extract_string(
                 obj,
-                &["assignee", "assigned_to", "owner", "responsible"]
+                &["agent_persona", "assignee", "assigned_to", "owner", "responsible"]
             );
 
             // Validate and resolve assignee
@@ -1186,7 +1331,7 @@ impl RigPRDParserAdapter {
         prompt.push_str("- \"description\": string (detailed description with WHAT/WHY/HOW/ACCEPTANCE)\n");
         prompt.push_str("- \"priority\": \"high\", \"medium\", or \"low\"\n");
         prompt.push_str("- \"estimated_complexity\": number 1-5 (sub-tasks should be simpler than parent)\n");
-        prompt.push_str("- \"assignee\": persona name from available list, or \"unassigned\"\n\n");
+        prompt.push_str("- \"agent_persona\": agent persona/role from available list, or \"unassigned\"\n\n");
 
         prompt.push_str("EXAMPLE FORMAT:\n");
         prompt.push_str("[\n");
@@ -1195,14 +1340,14 @@ impl RigPRDParserAdapter {
         prompt.push_str("    \"description\": \"Configure JWT middleware to validate tokens on protected routes. This ensures secure API access.\",\n");
         prompt.push_str("    \"priority\": \"high\",\n");
         prompt.push_str("    \"estimated_complexity\": 3,\n");
-        prompt.push_str("    \"assignee\": \"Backend Developer\"\n");
+        prompt.push_str("    \"agent_persona\": \"Backend Developer\"\n");
         prompt.push_str("  },\n");
         prompt.push_str("  {\n");
         prompt.push_str("    \"title\": \"Write authentication tests\",\n");
         prompt.push_str("    \"description\": \"Create unit tests for login, logout, and token refresh flows.\",\n");
         prompt.push_str("    \"priority\": \"medium\",\n");
         prompt.push_str("    \"estimated_complexity\": 2,\n");
-        prompt.push_str("    \"assignee\": \"QA Engineer\"\n");
+        prompt.push_str("    \"agent_persona\": \"QA Engineer\"\n");
         prompt.push_str("  }\n");
         prompt.push_str("]\n\n");
 
@@ -1274,10 +1419,10 @@ impl RigPRDParserAdapter {
                 &["estimated_complexity", "complexity", "difficulty"]
             ).unwrap_or(3); // Default lower complexity for sub-tasks
 
-            // Extract and validate assignee
+            // Extract and validate agent_persona (with fallback aliases)
             let llm_assignee = Self::extract_string(
                 obj,
-                &["assignee", "assigned_to", "owner"]
+                &["agent_persona", "assignee", "assigned_to", "owner"]
             );
             let validated_assignee = Self::validate_assignee(&title, llm_assignee.as_deref(), personas, fallback_model_name, update_tx).await;
 
@@ -1323,6 +1468,82 @@ impl RigPRDParserAdapter {
             _ => "   ", // Deeper nesting (future expansion)
         }
     }
+
+    /// Assigns the most appropriate persona to a task using LLM in a second pass.
+    ///
+    /// This method analyzes the task's title and description to determine which persona
+    /// from the available list would be best suited to complete the work. This two-pass
+    /// approach prevents biasing the LLM during task generation - tasks are first derived
+    /// from the PRD content alone, then personas are assigned based on the generated tasks.
+    ///
+    /// # Arguments
+    ///
+    /// * `task_title` - The task's title
+    /// * `task_description` - The task's detailed description
+    ///
+    /// # Returns
+    ///
+    /// The name of the assigned persona, or "Default Agent" if no personas are available
+    /// or if the LLM cannot make a good match.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the LLM call fails or returns invalid output.
+    pub async fn assign_persona_to_task(
+        &self,
+        task_title: &str,
+        task_description: &str,
+    ) -> std::result::Result<std::string::String, std::string::String> {
+        // If no personas are available, use Default Agent
+        if self.personas.is_empty() {
+            return std::result::Result::Ok(std::string::String::from("Default Agent"));
+        }
+
+        // Build the persona assignment prompt
+        let persona_names: std::vec::Vec<&str> = self.personas.iter().map(|p| p.name.as_str()).collect();
+        let persona_list = persona_names.join("\n");
+
+        let prompt = std::format!(
+            "You are assigning tasks to team members. Select the MOST APPROPRIATE persona from the list to complete this task.\n\n\
+            AVAILABLE PERSONAS:\n{}\n\n\
+            TASK TO ASSIGN:\n\
+            Title: {}\n\
+            Description: {}\n\n\
+            INSTRUCTIONS:\n\
+            - Analyze the task requirements carefully\n\
+            - Select the persona whose expertise best matches the task\n\
+            - Respond with ONLY the persona name from the list above\n\
+            - If none are appropriate, respond with exactly: Default Agent\n\n\
+            YOUR RESPONSE (persona name only):",
+            persona_list, task_title, task_description
+        );
+
+        // Call LLM to assign persona
+        let client = rig::providers::ollama::Client::new();
+        let agent = client.agent(&self.model_name).build();
+
+        let response = rig::completion::Prompt::prompt(&agent, prompt.as_str())
+            .await
+            .map_err(|e| std::format!("Failed to call LLM for persona assignment: {}", e))?;
+
+        // Extract persona name and validate it exists in the list
+        let assigned_persona = response.trim().to_string();
+
+        // Check if it matches any available persona (case-insensitive)
+        let matched_persona = self.personas
+            .iter()
+            .find(|p| p.name.eq_ignore_ascii_case(&assigned_persona))
+            .map(|p| p.name.clone());
+
+        if let std::option::Option::Some(persona) = matched_persona {
+            std::result::Result::Ok(persona)
+        } else if assigned_persona.eq_ignore_ascii_case("Default Agent") {
+            std::result::Result::Ok(std::string::String::from("Default Agent"))
+        } else {
+            // LLM returned something invalid, fallback to Default Agent
+            std::result::Result::Ok(std::string::String::from("Default Agent"))
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -1331,8 +1552,8 @@ impl crate::ports::prd_parser_port::PRDParserPort for RigPRDParserAdapter {
         &self,
         prd: &task_manager::domain::prd::PRD,
     ) -> std::result::Result<std::vec::Vec<task_manager::domain::task::Task>, std::string::String> {
-        // Build complete prompt
-        let prompt = Self::build_prompt(prd, &self.personas);
+        // Build complete prompt with RAG context
+        let prompt = self.build_prompt(prd, &self.personas).await;
 
         // Initialize Rig Ollama client (uses http://localhost:11434 by default)
         let client = rig::providers::ollama::Client::new();
@@ -1364,8 +1585,8 @@ mod tests {
         std::assert!(prompt.contains("estimated_complexity"));
     }
 
-    #[test]
-    fn test_build_prompt_includes_prd_sections() {
+    #[tokio::test]
+    async fn test_build_prompt_includes_prd_sections() {
         // Test: Validates prompt includes all PRD sections.
         // Justification: LLM needs complete context to generate accurate tasks.
         let prd = task_manager::domain::prd::PRD::new(
@@ -1377,7 +1598,14 @@ mod tests {
             std::string::String::from("raw content"),
         );
 
-        let prompt = super::RigPRDParserAdapter::build_prompt(&prd, &[]);
+        // Create adapter without RAG for simple prompt test
+        let adapter = super::RigPRDParserAdapter::new(
+            String::from("llama3.2:latest"),
+            String::from("llama3.2:latest"),
+            std::vec![],
+        );
+
+        let prompt = adapter.build_prompt(&prd, &[]).await;
 
         std::assert!(prompt.contains("Test PRD"));
         std::assert!(prompt.contains("Objective 1"));
@@ -1605,7 +1833,7 @@ Hope this helps!"#;
             description: std::string::String::from("Build secure auth with JWT"),
             status: task_manager::domain::task_status::TaskStatus::Todo,
             complexity: std::option::Option::Some(8),
-            assignee: std::option::Option::Some(std::string::String::from("Alice")),
+            agent_persona: std::option::Option::Some(std::string::String::from("Backend Developer")),
             parent_task_id: std::option::Option::None,
             subtask_ids: std::vec::Vec::new(),
             dependencies: std::vec::Vec::new(),
@@ -1631,7 +1859,7 @@ Hope this helps!"#;
         std::assert!(prompt.contains("Complexity: 8/10"), "Missing complexity");
         std::assert!(prompt.contains("PROJECT CONTEXT"), "Missing PRD context");
         std::assert!(prompt.contains("OUTPUT REQUIREMENTS"), "Missing output format");
-        std::assert!(prompt.contains("3-5 sub-task objects"), "Missing sub-task count");
+        std::assert!(prompt.contains("3-5 sub-tasks"), "Missing sub-task count");
     }
 
     #[test]
@@ -1733,7 +1961,7 @@ Hope this helps!"#;
             description: std::string::String::from("Multi-step work"),
             status: task_manager::domain::task_status::TaskStatus::Todo,
             complexity: std::option::Option::Some(8),
-            assignee: std::option::Option::None,
+            agent_persona: std::option::Option::None,
             parent_task_id: std::option::Option::None,
             subtask_ids: std::vec::Vec::new(),
             dependencies: std::vec::Vec::new(),

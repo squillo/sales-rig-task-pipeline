@@ -234,7 +234,7 @@ async fn handle_list_tasks(
         };
         task_manager::ports::task_repository_port::TaskFilter::ByStatus(status)
     } else if let std::option::Option::Some(assignee) = params.assignee {
-        task_manager::ports::task_repository_port::TaskFilter::ByAssignee(assignee)
+        task_manager::ports::task_repository_port::TaskFilter::ByAgentPersona(assignee)
     } else {
         task_manager::ports::task_repository_port::TaskFilter::All
     };
@@ -266,7 +266,7 @@ async fn handle_list_tasks(
                 "id": task.id,
                 "title": task.title,
                 "status": format!("{:?}", task.status),
-                "assignee": task.assignee,
+                "agent_persona": task.agent_persona,
                 "due_date": task.due_date,
                 "created_at": task.created_at.to_rfc3339(),
                 "updated_at": task.updated_at.to_rfc3339(),
@@ -427,7 +427,7 @@ async fn handle_update_task(
     }
 
     if let std::option::Option::Some(assignee) = params.assignee {
-        task.assignee = std::option::Option::Some(assignee);
+        task.agent_persona = std::option::Option::Some(assignee);
     }
 
     task.updated_at = chrono::Utc::now();
@@ -569,7 +569,7 @@ async fn handle_get_resource(
                         "id": task.id,
                         "title": task.title,
                         "status": format!("{:?}", task.status),
-                        "assignee": task.assignee,
+                        "agent_persona": task.agent_persona,
                         "due_date": task.due_date,
                         "created_at": task.created_at.to_rfc3339(),
                         "updated_at": task.updated_at.to_rfc3339(),

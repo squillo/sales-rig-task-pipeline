@@ -5,6 +5,7 @@
 //! to ensure structured output and includes fallback logic for LLM unavailability.
 //!
 //! Revision History
+//! - 2025-11-28T22:30:00Z @AI: Add RAG context injection into task decomposition prompts (Phase 5 Task 5.3). Added optional embedding_port, artifact_repository, and project_id fields to struct. Made struct Clone-able. Created new_with_rag() constructor. Implemented retrieve_rag_context() that searches for relevant artifacts using task title. Modified build_decomposition_prompt() to async and inject RAG context section. Updated decompose_task() to use async prompt building. Backward compatible with new() constructor.
 //! - 2025-11-23T17:15:00Z @AI: Create RigTaskDecompositionAdapter for Phase 3 Sprint 7.
 
 /// DTO for JSON Schema-enforced subtask extraction.
@@ -69,8 +70,12 @@ struct SubtaskExtraction {
 /// std::assert!(subtasks.len() >= 3 && subtasks.len() <= 5);
 /// # }
 /// ```
+#[derive(Clone)]
 pub struct RigTaskDecompositionAdapter {
     model: String,
+    embedding_port: std::option::Option<std::sync::Arc<dyn crate::ports::embedding_port::EmbeddingPort + std::marker::Send + std::marker::Sync>>,
+    artifact_repository: std::option::Option<std::sync::Arc<std::sync::Mutex<dyn task_manager::ports::artifact_repository_port::ArtifactRepositoryPort + std::marker::Send>>>,
+    project_id: std::option::Option<std::string::String>,
 }
 
 impl RigTaskDecompositionAdapter {
@@ -89,7 +94,133 @@ impl RigTaskDecompositionAdapter {
     /// );
     /// ```
     pub fn new(model: String) -> Self {
-        RigTaskDecompositionAdapter { model }
+        RigTaskDecompositionAdapter {
+            model,
+            embedding_port: std::option::Option::None,
+            artifact_repository: std::option::Option::None,
+            project_id: std::option::Option::None,
+        }
+    }
+
+    /// Creates a new RigTaskDecompositionAdapter with RAG context retrieval capabilities.
+    ///
+    /// This constructor enables the adapter to inject relevant artifacts from the
+    /// knowledge base into decomposition prompts, improving context awareness for
+    /// subtask generation.
+    ///
+    /// # Arguments
+    ///
+    /// * `model` - The model name to use
+    /// * `embedding_port` - Port for generating query embeddings
+    /// * `artifact_repository` - Repository for artifact similarity search
+    /// * `project_id` - Optional project ID to scope artifact search
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use task_orchestrator::adapters::rig_task_decomposition_adapter::RigTaskDecompositionAdapter;
+    /// # async fn example(
+    /// #     embedding_port: std::sync::Arc<dyn task_orchestrator::ports::embedding_port::EmbeddingPort + Send + Sync>,
+    /// #     artifact_repo: std::sync::Arc<std::sync::Mutex<dyn task_manager::ports::artifact_repository_port::ArtifactRepositoryPort + Send>>,
+    /// # ) {
+    /// let adapter = RigTaskDecompositionAdapter::new_with_rag(
+    ///     String::from("llama3.1"),
+    ///     embedding_port,
+    ///     artifact_repo,
+    ///     std::option::Option::Some(String::from("project-123")),
+    /// );
+    /// # }
+    /// ```
+    pub fn new_with_rag(
+        model: String,
+        embedding_port: std::sync::Arc<dyn crate::ports::embedding_port::EmbeddingPort + std::marker::Send + std::marker::Sync>,
+        artifact_repository: std::sync::Arc<std::sync::Mutex<dyn task_manager::ports::artifact_repository_port::ArtifactRepositoryPort + std::marker::Send>>,
+        project_id: std::option::Option<std::string::String>,
+    ) -> Self {
+        RigTaskDecompositionAdapter {
+            model,
+            embedding_port: std::option::Option::Some(embedding_port),
+            artifact_repository: std::option::Option::Some(artifact_repository),
+            project_id,
+        }
+    }
+
+    /// Retrieves relevant artifacts from the knowledge base for RAG context.
+    ///
+    /// Searches for artifacts related to the task title using semantic similarity.
+    /// Returns formatted context string if artifacts are found.
+    ///
+    /// # Arguments
+    ///
+    /// * `task` - The task to search context for
+    ///
+    /// # Returns
+    ///
+    /// Returns a formatted string with relevant artifacts, or empty string if:
+    /// - RAG dependencies are not configured
+    /// - No relevant artifacts are found
+    /// - Search fails
+    async fn retrieve_rag_context(&self, task: &task_manager::domain::task::Task) -> std::string::String {
+        // Early return if RAG not configured
+        let (embedding_port, artifact_repository) = match (&self.embedding_port, &self.artifact_repository) {
+            (std::option::Option::Some(e), std::option::Option::Some(a)) => (e, a),
+            _ => return std::string::String::new(),
+        };
+
+        // Use task title as search query
+        let query = &task.title;
+
+        // Generate embedding for query
+        let query_embedding = match embedding_port.generate_embedding(query).await {
+            std::result::Result::Ok(emb) => emb,
+            std::result::Result::Err(e) => {
+                eprintln!("RAG: Failed to generate query embedding for decomposition: {}", e);
+                return std::string::String::new();
+            }
+        };
+
+        // Search for similar artifacts (limit to 2 most relevant for decomposition)
+        let repo = match artifact_repository.lock() {
+            std::result::Result::Ok(r) => r,
+            std::result::Result::Err(e) => {
+                eprintln!("RAG: Failed to acquire repository lock: {}", e);
+                return std::string::String::new();
+            }
+        };
+
+        let similar_artifacts = match repo.find_similar(
+            &query_embedding,
+            2,  // Limit to top 2 artifacts for focused context
+            std::option::Option::Some(0.7),  // Higher threshold for decomposition
+            self.project_id.clone(),
+        ) {
+            std::result::Result::Ok(artifacts) => artifacts,
+            std::result::Result::Err(e) => {
+                eprintln!("RAG: Failed to search artifacts: {}", e);
+                return std::string::String::new();
+            }
+        };
+
+        // Format artifacts into context string
+        if similar_artifacts.is_empty() {
+            return std::string::String::new();
+        }
+
+        let mut context = std::string::String::from("**RELEVANT CONTEXT FROM KNOWLEDGE BASE**:\n\n");
+        for (i, similar) in similar_artifacts.iter().enumerate() {
+            let artifact = &similar.artifact;
+            let similarity = (1.0 - similar.distance) * 100.0;
+
+            context.push_str(&std::format!(
+                "Context {}: [Similarity: {:.1}%]\n{}\n\n",
+                i + 1,
+                similarity,
+                artifact.content
+            ));
+        }
+
+        context.push_str("Use the above context to inform subtask generation when relevant.\n\n");
+        context
     }
 
     /// Builds the decomposition prompt for the LLM.
@@ -97,10 +228,17 @@ impl RigTaskDecompositionAdapter {
     /// Constructs a detailed prompt that guides the LLM to generate 3-5
     /// actionable subtasks. The prompt includes decomposition guidelines,
     /// parent task context, and quality criteria.
-    fn build_decomposition_prompt(&self, task: &task_manager::domain::task::Task) -> String {
+    async fn build_decomposition_prompt(&self, task: &task_manager::domain::task::Task) -> String {
+        // Retrieve RAG context if available
+        let rag_context = self.retrieve_rag_context(task).await;
         let mut prompt = std::string::String::new();
 
         prompt.push_str("You are a project management assistant specialized in breaking down complex tasks.\n\n");
+
+        // Inject RAG context before task details if available
+        if !rag_context.is_empty() {
+            prompt.push_str(&rag_context);
+        }
 
         prompt.push_str(&std::format!("**Parent Task**: {}\n\n", task.title));
 
@@ -115,8 +253,8 @@ impl RigTaskDecompositionAdapter {
         prompt.push_str("4. Avoid overly granular steps (each subtask should be substantial)\n");
         prompt.push_str("5. Include technical specifics where applicable\n\n");
 
-        if let std::option::Option::Some(ref assignee) = task.assignee {
-            prompt.push_str(&std::format!("**Parent Assignee**: {} (may inherit to subtasks)\n\n", assignee));
+        if let std::option::Option::Some(ref agent_persona) = task.agent_persona {
+            prompt.push_str(&std::format!("**Parent Assignee Persona**: {} (may inherit to subtasks)\n\n", agent_persona));
         }
 
         if let std::option::Option::Some(ref due_date) = task.due_date {
@@ -155,7 +293,7 @@ impl RigTaskDecompositionAdapter {
             .map(|title| {
                 let subtask_action = transcript_extractor::domain::action_item::ActionItem {
                     title,
-                    assignee: parent_task.assignee.clone(),
+                    assignee: parent_task.agent_persona.clone(),
                     due_date: parent_task.due_date.clone(),
                 };
 
@@ -180,8 +318,8 @@ impl crate::ports::task_decomposition_port::TaskDecompositionPort for RigTaskDec
         &self,
         task: &task_manager::domain::task::Task,
     ) -> std::result::Result<std::vec::Vec<task_manager::domain::task::Task>, std::string::String> {
-        // Build decomposition prompt
-        let prompt = self.build_decomposition_prompt(task);
+        // Build decomposition prompt with RAG context
+        let prompt = self.build_decomposition_prompt(task).await;
 
         // Create Ollama client and extractor
         let client = rig::providers::ollama::Client::from_url("http://localhost:11434");
@@ -244,8 +382,8 @@ mod tests {
     use super::*;
     use crate::ports::task_decomposition_port::TaskDecompositionPort;
 
-    #[test]
-    fn test_build_decomposition_prompt_includes_task_details() {
+    #[tokio::test]
+    async fn test_build_decomposition_prompt_includes_task_details() {
         // Test: Validates prompt construction includes parent task context.
         // Justification: Prompts must provide sufficient context for quality decomposition.
         let adapter = RigTaskDecompositionAdapter::new(std::string::String::from("llama3.1"));
@@ -258,7 +396,7 @@ mod tests {
         let mut task = task_manager::domain::task::Task::from_action_item(&action, std::option::Option::None);
         task.complexity = std::option::Option::Some(8);
 
-        let prompt = adapter.build_decomposition_prompt(&task);
+        let prompt = adapter.build_decomposition_prompt(&task).await;
 
         std::assert!(prompt.contains("Implement OAuth2 authentication"), "Prompt should include task title");
         std::assert!(prompt.contains("Complexity Score"), "Prompt should mention complexity");
@@ -297,9 +435,9 @@ mod tests {
                 "Subtask complexity should be parent - 2"
             );
             std::assert_eq!(
-                subtask.assignee,
+                subtask.agent_persona,
                 std::option::Option::Some(std::string::String::from("Bob")),
-                "Subtask should inherit parent assignee"
+                "Subtask should inherit parent assignee persona"
             );
             std::assert!(subtask.title.contains("Refactor payment system"), "Subtask title should reference parent");
         }

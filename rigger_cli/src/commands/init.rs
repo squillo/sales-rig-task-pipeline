@@ -42,12 +42,42 @@ pub async fn execute() -> anyhow::Result<()> {
     std::fs::create_dir(&prds_dir)?;
     println!("✓ Created .rigger/prds directory");
 
+    // Create lib subdirectory for SQLite extensions
+    let lib_dir = rigger_dir.join("lib");
+    std::fs::create_dir(&lib_dir)?;
+
+    // Try to copy sqlite-vec extension from common locations
+    let vec_sources = std::vec![
+        std::path::PathBuf::from("/tmp/vec0.dylib"),
+        std::path::PathBuf::from("/opt/homebrew/lib/vec0.dylib"),
+        std::path::PathBuf::from("/usr/local/lib/vec0.dylib"),
+    ];
+
+    let vec_dest = lib_dir.join("vec0.dylib");
+    let mut vec_copied = false;
+
+    for source in vec_sources {
+        if source.exists() {
+            if let std::result::Result::Ok(_) = std::fs::copy(&source, &vec_dest) {
+                println!("✓ Installed sqlite-vec extension (RAG enabled)");
+                vec_copied = true;
+                break;
+            }
+        }
+    }
+
+    if !vec_copied {
+        println!("⚠ sqlite-vec extension not found (RAG features will be disabled)");
+        println!("  To enable RAG: Download vec0.dylib from https://github.com/asg017/sqlite-vec");
+        println!("  and copy to .rigger/lib/vec0.dylib");
+    }
+
     // Create config.json
     let config = serde_json::json!({
         "provider": "ollama",
         "model": {
-            "main": "llama3.1",
-            "research": "llama3.1",
+            "main": "llama3.2",
+            "research": "llama3.2",
             "fallback": "llama3.2"
         },
         "database_url": "sqlite:.rigger/tasks.db"
@@ -92,6 +122,7 @@ pub async fn execute() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_init_creates_directory_structure() {
         // Test: Validates init command creates .rigger directory structure.
         // Justification: Ensures directory scaffold is correct for Rigger operation.
@@ -120,12 +151,13 @@ mod tests {
         let config: serde_json::Value = serde_json::from_str(&config_content).unwrap();
         std::assert_eq!(config["provider"], "ollama");
 
-        // Cleanup
-        std::env::set_current_dir(original_dir).unwrap();
-        std::fs::remove_dir_all(&temp_dir).unwrap();
+        // Cleanup (ignore errors if already cleaned)
+        let _ = std::env::set_current_dir(original_dir);
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_init_fails_if_directory_exists() {
         // Test: Validates init fails gracefully if .rigger already exists.
         // Justification: Prevents accidentally overwriting existing Rigger configuration.
@@ -142,8 +174,8 @@ mod tests {
         let result = super::execute().await;
         std::assert!(result.is_err(), "Init should fail if .rigger exists");
 
-        // Cleanup
-        std::env::set_current_dir(original_dir).unwrap();
-        std::fs::remove_dir_all(&temp_dir).unwrap();
+        // Cleanup (ignore errors if already cleaned)
+        let _ = std::env::set_current_dir(original_dir);
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

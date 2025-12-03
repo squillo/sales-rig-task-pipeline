@@ -12,6 +12,15 @@
 //! enhancement and comprehension test lists.
 //!
 //! Revision History
+//! - 2025-11-30T21:30:00Z @AI: Add sort_order column for manual task prioritization. Added sort_order INTEGER NULL to tasks table schema, migration for existing databases, updated SELECT/INSERT queries, and row_to_task() mapping. Enables drag-and-drop style reordering of tasks in TODO column.
+//! - 2025-11-30T20:00:00Z @AI: Fix projects table schema mismatch. Added prd_ids_json column to projects table schema for SqliteProjectAdapter compatibility. Added ALTER TABLE migration to add column to existing databases that were created without it.
+//! - 2025-11-29T18:00:00Z @AI: Add prds table to schema initialization. Previously prds table was created on-demand during PRD processing, causing PRDs to not persist across sessions. Now created in connect_and_init() with foreign key to projects table for proper Project→PRD→Task linkage.
+//! - 2025-11-29T17:00:00Z @AI: Expand persona seeding from 1 default to 12 standard personas (Backend/Frontend/Full Stack Developer, DevOps, QA, Security Analyst, SRE, DBA, Tech Writer, PM, PO, Architect) with role-appropriate tool permissions. Full Stack Developer set as default.
+//! - 2025-11-29T15:30:00Z @AI: Rename assignee column to agent_persona in database schema. Updated CREATE TABLE, INSERT, SELECT, and WHERE clauses. Added migration to copy data from old assignee column to new agent_persona column for backward compatibility. Updated row_to_task() mapping and all tests to use agent_persona field name.
+//! - 2025-11-29T14:00:00Z @AI: Add task_artifacts junction table and methods for task-artifact semantic linking. Created task_artifacts table with task_id, artifact_id, relevance_score, created_at fields and foreign keys. Added link_task_to_artifacts(), get_artifacts_for_task(), get_tasks_for_artifact() async methods for managing many-to-many relationships between tasks and PRD artifact chunks.
+//! - 2025-11-29T09:00:00Z @AI: Add create_if_missing(true) to SqliteConnectOptions to ensure database file is created when it doesn't exist.
+//! - 2025-11-28T19:25:00Z @AI: Add artifacts and artifacts_vec tables for Phase 2 RAG knowledge storage and vector search.
+//! - 2025-11-28T19:20:00Z @AI: Load sqlite-vec extension (vec0) in connect_and_init for Phase 2 RAG vector search support.
 //! - 2025-11-26T07:40:00Z @AI: Add personas, agent_tools, and persona_tools tables with seed data for Phase 3 persona management.
 //! - 2025-11-26T05:00:00Z @AI: Add pool() accessor method to expose underlying SQLite pool for raw SQL operations on Project and PRD entities.
 //! - 2025-11-25T21:45:00Z @AI: Fix critical bug - add missing 'description' field to all SELECT queries. All queries were missing description column causing field index mismatch in row_to_task(), resulting in JSON parsing errors (E_HEX_202 EOF while parsing). Now all queries include description at index 2.
@@ -45,15 +54,75 @@ impl SqliteTaskAdapter {
     }
 
     /// Asynchronously connects to the provided database URL and ensures the schema exists.
+    ///
+    /// This method loads the sqlite-vec extension for vector similarity search support.
+    /// The extension is embedded in the binary and extracted to a temp directory at runtime,
+    /// ensuring RAG features are always available regardless of working directory.
     pub async fn connect_and_init(database_url: &str) -> std::result::Result<Self, std::string::String> {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect(database_url)
-            .await
-            .map_err(|e| std::format!("Failed to connect SQLite: {:?}", e))?;
+        // Try embedded extension first (always available, bundled in binary)
+        let mut extension_paths = std::vec![];
+
+        if let std::result::Result::Ok(embedded_path) = crate::adapters::embedded_sqlite_vec::get_extension_path_for_sqlite() {
+            extension_paths.push(embedded_path);
+        }
+
+        // Fallback paths (for development or custom installations)
+        let abs_path = std::env::current_dir()
+            .ok()
+            .and_then(|p| p.join(".rigger/lib/vec0").to_str().map(|s| s.to_string()))
+            .unwrap_or_default();
+
+        extension_paths.push(std::string::String::from("vec0"));              // System-wide install
+        extension_paths.push(std::string::String::from(".rigger/lib/vec0"));  // Local install
+        extension_paths.push(abs_path);                                        // Absolute path
+
+        let mut pool = std::option::Option::None;
+
+        for ext_path in &extension_paths {
+            if ext_path.is_empty() {
+                continue;
+            }
+
+            let connect_options = database_url
+                .parse::<sqlx::sqlite::SqliteConnectOptions>()
+                .map_err(|e| std::format!("Failed to parse database URL: {:?}", e))?
+                .create_if_missing(true)
+                .optimize_on_close(false, std::option::Option::None)
+                .extension(ext_path.clone());
+
+            if let std::result::Result::Ok(p) = sqlx::sqlite::SqlitePoolOptions::new()
+                .max_connections(1)
+                .connect_with(connect_options)
+                .await
+            {
+                pool = std::option::Option::Some(p);
+                break;
+            }
+        }
+
+        let pool = match pool {
+            std::option::Option::Some(p) => p,
+            std::option::Option::None => {
+                // Fall back to connection without extension (RAG features will be disabled)
+                eprintln!("Warning: sqlite-vec extension not available. RAG features disabled.");
+                eprintln!("To enable RAG: Install vec0.dylib to .rigger/lib/ directory");
+
+                let connect_options = database_url
+                    .parse::<sqlx::sqlite::SqliteConnectOptions>()
+                    .map_err(|e| std::format!("Failed to parse database URL: {:?}", e))?
+                    .create_if_missing(true)
+                    .optimize_on_close(false, std::option::Option::None);
+
+                sqlx::sqlite::SqlitePoolOptions::new()
+                    .max_connections(1)
+                    .connect_with(connect_options)
+                    .await
+                    .map_err(|e| std::format!("Failed to connect to SQLite: {:?}", e))?
+            }
+        };
         // Ensure schema
         sqlx::query(
-            "CREATE TABLE IF NOT EXISTS tasks (\n                id TEXT PRIMARY KEY,\n                title TEXT NOT NULL,\n                description TEXT NOT NULL DEFAULT '',\n                assignee TEXT NULL,\n                due_date TEXT NULL,\n                status TEXT NOT NULL,\n                source_transcript_id TEXT NULL,\n                source_prd_id TEXT NULL,\n                parent_task_id TEXT NULL,\n                subtask_ids_json TEXT NULL,\n                created_at TEXT NOT NULL,\n                updated_at TEXT NOT NULL,\n                enhancements_json TEXT NULL,\n                comprehension_tests_json TEXT NULL,\n                complexity INTEGER NULL,\n                reasoning TEXT NULL,\n                context_files_json TEXT NULL,\n                dependencies_json TEXT NULL\n            )"
+            "CREATE TABLE IF NOT EXISTS tasks (\n                id TEXT PRIMARY KEY,\n                title TEXT NOT NULL,\n                description TEXT NOT NULL DEFAULT '',\n                agent_persona TEXT NULL,\n                due_date TEXT NULL,\n                status TEXT NOT NULL,\n                source_transcript_id TEXT NULL,\n                source_prd_id TEXT NULL,\n                parent_task_id TEXT NULL,\n                subtask_ids_json TEXT NULL,\n                created_at TEXT NOT NULL,\n                updated_at TEXT NOT NULL,\n                enhancements_json TEXT NULL,\n                comprehension_tests_json TEXT NULL,\n                complexity INTEGER NULL,\n                reasoning TEXT NULL,\n                context_files_json TEXT NULL,\n                dependencies_json TEXT NULL,\n                sort_order INTEGER NULL\n            )"
         )
         .execute(&pool)
         .await
@@ -69,19 +138,59 @@ impl SqliteTaskAdapter {
             .execute(&pool)
             .await; // Ignore error if column already exists
 
+        // Rename assignee to agent_persona (migration for existing databases)
+        // Note: SQLite doesn't support RENAME COLUMN directly in older versions,
+        // so we add the new column and copy data if old column exists
+        let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN agent_persona TEXT NULL")
+            .execute(&pool)
+            .await; // Ignore error if column already exists
+        let _ = sqlx::query("UPDATE tasks SET agent_persona = assignee WHERE agent_persona IS NULL AND assignee IS NOT NULL")
+            .execute(&pool)
+            .await; // Migrate data from old column
+
+        // Add sort_order column for manual task prioritization (migration for existing databases)
+        let _ = sqlx::query("ALTER TABLE tasks ADD COLUMN sort_order INTEGER NULL")
+            .execute(&pool)
+            .await; // Ignore error if column already exists
+
         // Create projects table (Phase 4: Project-scoped persona management)
+        // Note: prd_ids_json added for SqliteProjectAdapter compatibility
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS projects (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL UNIQUE,
                 description TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                prd_ids_json TEXT NULL
             )"
         )
         .execute(&pool)
         .await
         .map_err(|e| std::format!("Failed to create projects table: {:?}", e))?;
+
+        // Migration: Add prd_ids_json column if missing (for existing databases)
+        let _ = sqlx::query("ALTER TABLE projects ADD COLUMN prd_ids_json TEXT NULL")
+            .execute(&pool)
+            .await; // Ignore error if column already exists
+
+        // Create prds table (Phase 4: PRD-to-Project-to-Task linkage)
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS prds (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                objectives_json TEXT NULL,
+                tech_stack_json TEXT NULL,
+                constraints_json TEXT NULL,
+                raw_content TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+            )"
+        )
+        .execute(&pool)
+        .await
+        .map_err(|e| std::format!("Failed to create prds table: {:?}", e))?;
 
         // Create personas table (Phase 3: Persona Management)
         sqlx::query(
@@ -164,7 +273,7 @@ impl SqliteTaskAdapter {
             .map_err(|e| std::format!("Failed to seed agent_tools: {:?}", e))?;
         }
 
-        // Create default persona with safe tools (idempotent)
+        // Seed standard personas with role-appropriate tool permissions (idempotent)
         let persona_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM personas")
             .fetch_one(&pool)
             .await
@@ -172,42 +281,202 @@ impl SqliteTaskAdapter {
 
         if persona_count == 0 {
             let now = chrono::Utc::now().to_rfc3339();
+
+            // Insert all standard personas
             sqlx::query(
-                "INSERT INTO personas (id, name, role, description, is_default, created_at, updated_at)
-                 VALUES ('default-persona-001', 'Default Agent', 'General Purpose Assistant',
-                         'Default persona with safe read-only tools enabled', 1, ?1, ?2)"
+                "INSERT INTO personas (id, name, role, description, is_default, created_at, updated_at) VALUES
+                    ('persona-backend-dev', 'Backend Developer', 'Software Development', 'Builds server-side logic, APIs, and database integrations', 0, ?1, ?1),
+                    ('persona-frontend-dev', 'Frontend Developer', 'Software Development', 'Creates user interfaces and client-side functionality', 0, ?1, ?1),
+                    ('persona-fullstack-dev', 'Full Stack Developer', 'Software Development', 'End-to-end development across frontend and backend', 1, ?1, ?1),
+                    ('persona-devops', 'DevOps Engineer', 'Infrastructure', 'Manages CI/CD pipelines, infrastructure, and deployments', 0, ?1, ?1),
+                    ('persona-qa', 'QA Engineer', 'Quality Assurance', 'Designs and executes tests, ensures software quality', 0, ?1, ?1),
+                    ('persona-security', 'Security Analyst', 'Security', 'Audits code for vulnerabilities, ensures security compliance', 0, ?1, ?1),
+                    ('persona-sre', 'SRE', 'Site Reliability', 'Maintains system reliability, monitoring, and incident response', 0, ?1, ?1),
+                    ('persona-dba', 'Database Admin', 'Database', 'Manages database schemas, performance, and data integrity', 0, ?1, ?1),
+                    ('persona-tech-writer', 'Technical Writer', 'Documentation', 'Creates and maintains technical documentation', 0, ?1, ?1),
+                    ('persona-pm', 'Project Manager', 'Management', 'Coordinates project timelines, resources, and stakeholders', 0, ?1, ?1),
+                    ('persona-po', 'Product Owner', 'Product', 'Defines product vision, priorities, and requirements', 0, ?1, ?1),
+                    ('persona-architect', 'Architect', 'Architecture', 'Designs system architecture and technical strategies', 0, ?1, ?1)"
             )
-            .bind(&now)
             .bind(&now)
             .execute(&pool)
             .await
-            .map_err(|e| std::format!("Failed to create default persona: {:?}", e))?;
+            .map_err(|e| std::format!("Failed to seed personas: {:?}", e))?;
 
-            // Link default persona with 6 safe tools
+            // Backend Developer: Full dev access without git push
             sqlx::query(
                 "INSERT INTO persona_tools (persona_id, tool_id, enabled) VALUES
-                    ('default-persona-001', 'code_search', 1),
-                    ('default-persona-001', 'code_read', 1),
-                    ('default-persona-001', 'grep_search', 1),
-                    ('default-persona-001', 'web_search', 1),
-                    ('default-persona-001', 'web_fetch', 1),
-                    ('default-persona-001', 'doc_search', 1)"
-            )
-            .execute(&pool)
-            .await
-            .map_err(|e| std::format!("Failed to link default persona tools: {:?}", e))?;
+                    ('persona-backend-dev', 'code_search', 1), ('persona-backend-dev', 'code_read', 1),
+                    ('persona-backend-dev', 'grep_search', 1), ('persona-backend-dev', 'file_edit', 1),
+                    ('persona-backend-dev', 'file_write', 1), ('persona-backend-dev', 'bash_exec', 1),
+                    ('persona-backend-dev', 'db_query', 1), ('persona-backend-dev', 'git_commit', 1),
+                    ('persona-backend-dev', 'api_call', 1)"
+            ).execute(&pool).await.map_err(|e| std::format!("Failed to link backend-dev tools: {:?}", e))?;
+
+            // Frontend Developer: UI/UX focused
+            sqlx::query(
+                "INSERT INTO persona_tools (persona_id, tool_id, enabled) VALUES
+                    ('persona-frontend-dev', 'code_search', 1), ('persona-frontend-dev', 'code_read', 1),
+                    ('persona-frontend-dev', 'grep_search', 1), ('persona-frontend-dev', 'file_edit', 1),
+                    ('persona-frontend-dev', 'file_write', 1), ('persona-frontend-dev', 'web_search', 1),
+                    ('persona-frontend-dev', 'web_fetch', 1), ('persona-frontend-dev', 'git_commit', 1)"
+            ).execute(&pool).await.map_err(|e| std::format!("Failed to link frontend-dev tools: {:?}", e))?;
+
+            // Full Stack Developer: All development tools
+            sqlx::query(
+                "INSERT INTO persona_tools (persona_id, tool_id, enabled) VALUES
+                    ('persona-fullstack-dev', 'code_search', 1), ('persona-fullstack-dev', 'code_read', 1),
+                    ('persona-fullstack-dev', 'grep_search', 1), ('persona-fullstack-dev', 'file_edit', 1),
+                    ('persona-fullstack-dev', 'file_write', 1), ('persona-fullstack-dev', 'bash_exec', 1),
+                    ('persona-fullstack-dev', 'db_query', 1), ('persona-fullstack-dev', 'git_commit', 1),
+                    ('persona-fullstack-dev', 'api_call', 1), ('persona-fullstack-dev', 'web_search', 1),
+                    ('persona-fullstack-dev', 'web_fetch', 1)"
+            ).execute(&pool).await.map_err(|e| std::format!("Failed to link fullstack-dev tools: {:?}", e))?;
+
+            // DevOps Engineer: Infrastructure and deployment (includes git push)
+            sqlx::query(
+                "INSERT INTO persona_tools (persona_id, tool_id, enabled) VALUES
+                    ('persona-devops', 'code_search', 1), ('persona-devops', 'code_read', 1),
+                    ('persona-devops', 'grep_search', 1), ('persona-devops', 'file_edit', 1),
+                    ('persona-devops', 'file_write', 1), ('persona-devops', 'bash_exec', 1),
+                    ('persona-devops', 'git_commit', 1), ('persona-devops', 'git_push', 1),
+                    ('persona-devops', 'api_call', 1), ('persona-devops', 'db_query', 1)"
+            ).execute(&pool).await.map_err(|e| std::format!("Failed to link devops tools: {:?}", e))?;
+
+            // QA Engineer: Testing focused
+            sqlx::query(
+                "INSERT INTO persona_tools (persona_id, tool_id, enabled) VALUES
+                    ('persona-qa', 'code_search', 1), ('persona-qa', 'code_read', 1),
+                    ('persona-qa', 'grep_search', 1), ('persona-qa', 'bash_exec', 1),
+                    ('persona-qa', 'db_query', 1), ('persona-qa', 'web_search', 1),
+                    ('persona-qa', 'web_fetch', 1)"
+            ).execute(&pool).await.map_err(|e| std::format!("Failed to link qa tools: {:?}", e))?;
+
+            // Security Analyst: Security auditing (read-heavy)
+            sqlx::query(
+                "INSERT INTO persona_tools (persona_id, tool_id, enabled) VALUES
+                    ('persona-security', 'code_search', 1), ('persona-security', 'code_read', 1),
+                    ('persona-security', 'grep_search', 1), ('persona-security', 'web_search', 1),
+                    ('persona-security', 'web_fetch', 1), ('persona-security', 'doc_search', 1),
+                    ('persona-security', 'db_query', 1)"
+            ).execute(&pool).await.map_err(|e| std::format!("Failed to link security tools: {:?}", e))?;
+
+            // SRE: Site reliability (includes db write for incidents)
+            sqlx::query(
+                "INSERT INTO persona_tools (persona_id, tool_id, enabled) VALUES
+                    ('persona-sre', 'code_search', 1), ('persona-sre', 'code_read', 1),
+                    ('persona-sre', 'grep_search', 1), ('persona-sre', 'bash_exec', 1),
+                    ('persona-sre', 'db_query', 1), ('persona-sre', 'db_write', 1),
+                    ('persona-sre', 'api_call', 1), ('persona-sre', 'git_commit', 1)"
+            ).execute(&pool).await.map_err(|e| std::format!("Failed to link sre tools: {:?}", e))?;
+
+            // Database Admin: Database focused (full db access)
+            sqlx::query(
+                "INSERT INTO persona_tools (persona_id, tool_id, enabled) VALUES
+                    ('persona-dba', 'code_search', 1), ('persona-dba', 'code_read', 1),
+                    ('persona-dba', 'db_query', 1), ('persona-dba', 'db_write', 1),
+                    ('persona-dba', 'bash_exec', 1)"
+            ).execute(&pool).await.map_err(|e| std::format!("Failed to link dba tools: {:?}", e))?;
+
+            // Technical Writer: Documentation
+            sqlx::query(
+                "INSERT INTO persona_tools (persona_id, tool_id, enabled) VALUES
+                    ('persona-tech-writer', 'code_search', 1), ('persona-tech-writer', 'code_read', 1),
+                    ('persona-tech-writer', 'grep_search', 1), ('persona-tech-writer', 'doc_search', 1),
+                    ('persona-tech-writer', 'web_search', 1), ('persona-tech-writer', 'web_fetch', 1),
+                    ('persona-tech-writer', 'file_edit', 1), ('persona-tech-writer', 'file_write', 1)"
+            ).execute(&pool).await.map_err(|e| std::format!("Failed to link tech-writer tools: {:?}", e))?;
+
+            // Project Manager: Read-only research
+            sqlx::query(
+                "INSERT INTO persona_tools (persona_id, tool_id, enabled) VALUES
+                    ('persona-pm', 'web_search', 1), ('persona-pm', 'web_fetch', 1),
+                    ('persona-pm', 'doc_search', 1)"
+            ).execute(&pool).await.map_err(|e| std::format!("Failed to link pm tools: {:?}", e))?;
+
+            // Product Owner: Research plus code visibility
+            sqlx::query(
+                "INSERT INTO persona_tools (persona_id, tool_id, enabled) VALUES
+                    ('persona-po', 'web_search', 1), ('persona-po', 'web_fetch', 1),
+                    ('persona-po', 'doc_search', 1), ('persona-po', 'code_search', 1),
+                    ('persona-po', 'code_read', 1)"
+            ).execute(&pool).await.map_err(|e| std::format!("Failed to link po tools: {:?}", e))?;
+
+            // Architect: Design and planning (read-heavy)
+            sqlx::query(
+                "INSERT INTO persona_tools (persona_id, tool_id, enabled) VALUES
+                    ('persona-architect', 'code_search', 1), ('persona-architect', 'code_read', 1),
+                    ('persona-architect', 'grep_search', 1), ('persona-architect', 'doc_search', 1),
+                    ('persona-architect', 'web_search', 1), ('persona-architect', 'web_fetch', 1)"
+            ).execute(&pool).await.map_err(|e| std::format!("Failed to link architect tools: {:?}", e))?;
         }
+
+        // Create artifacts table for RAG knowledge storage (Phase 2: RAG)
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS artifacts (
+                id TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL,
+                source_id TEXT NOT NULL,
+                source_type TEXT NOT NULL,
+                content TEXT NOT NULL,
+                metadata TEXT NULL,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+            )"
+        )
+        .execute(&pool)
+        .await
+        .map_err(|e| std::format!("Failed to create artifacts table: {:?}", e))?;
+
+        // Create artifacts_vec virtual table for vector similarity search (Phase 2: RAG)
+        // Using vec0 module with 768-dimensional embeddings (nomic-embed-text)
+        // This will silently fail if sqlite-vec extension is not available
+        let _ = sqlx::query(
+            "CREATE VIRTUAL TABLE IF NOT EXISTS artifacts_vec USING vec0(
+                artifact_id TEXT PRIMARY KEY,
+                embedding FLOAT[768]
+            )"
+        )
+        .execute(&pool)
+        .await;
+
+        // Create task_artifacts junction table for task-to-artifact relationships (Phase 3: RAG)
+        // Links tasks to their most relevant PRD artifact chunks via semantic similarity
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS task_artifacts (
+                task_id TEXT NOT NULL,
+                artifact_id TEXT NOT NULL,
+                relevance_score REAL NOT NULL DEFAULT 0.0,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (task_id, artifact_id),
+                FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE,
+                FOREIGN KEY (artifact_id) REFERENCES artifacts(id) ON DELETE CASCADE
+            )"
+        )
+        .execute(&pool)
+        .await
+        .map_err(|e| std::format!("Failed to create task_artifacts table: {:?}", e))?;
 
         std::result::Result::Ok(SqliteTaskAdapter { pool })
     }
 
     pub(crate) fn block_on<T>(fut: impl std::future::Future<Output = T>) -> T {
-        // Build a current-thread runtime for synchronous trait methods.
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("failed to build tokio runtime");
-        rt.block_on(fut)
+        // Use the current runtime handle if available, otherwise create a new one.
+        // This prevents "Cannot start a runtime from within a runtime" errors.
+        match tokio::runtime::Handle::try_current() {
+            std::result::Result::Ok(handle) => {
+                // Already in async context - use block_in_place to avoid nested runtimes
+                tokio::task::block_in_place(|| handle.block_on(fut))
+            }
+            std::result::Result::Err(_) => {
+                // No async context - create a new runtime
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .expect("failed to build tokio runtime");
+                rt.block_on(fut)
+            }
+        }
     }
 
     pub async fn save_async(&self, entity: crate::domain::task::Task) -> hexser::HexResult<()> {
@@ -266,12 +535,12 @@ impl SqliteTaskAdapter {
                     )
                 })?;
         sqlx::query(
-            "INSERT INTO tasks (id, title, description, assignee, due_date, status, source_transcript_id, source_prd_id, parent_task_id, subtask_ids_json, created_at, updated_at, enhancements_json, comprehension_tests_json, complexity, reasoning, context_files_json, dependencies_json, completion_summary)\n             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)\n             ON CONFLICT(id) DO UPDATE SET\n               title=excluded.title, description=excluded.description, assignee=excluded.assignee, due_date=excluded.due_date, status=excluded.status,\n               source_transcript_id=excluded.source_transcript_id, source_prd_id=excluded.source_prd_id, parent_task_id=excluded.parent_task_id, subtask_ids_json=excluded.subtask_ids_json,\n               created_at=excluded.created_at, updated_at=excluded.updated_at,\n               enhancements_json=excluded.enhancements_json, comprehension_tests_json=excluded.comprehension_tests_json,\n               complexity=excluded.complexity, reasoning=excluded.reasoning, context_files_json=excluded.context_files_json, dependencies_json=excluded.dependencies_json, completion_summary=excluded.completion_summary"
+            "INSERT INTO tasks (id, title, description, agent_persona, due_date, status, source_transcript_id, source_prd_id, parent_task_id, subtask_ids_json, created_at, updated_at, enhancements_json, comprehension_tests_json, complexity, reasoning, context_files_json, dependencies_json, completion_summary, sort_order)\n             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)\n             ON CONFLICT(id) DO UPDATE SET\n               title=excluded.title, description=excluded.description, agent_persona=excluded.agent_persona, due_date=excluded.due_date, status=excluded.status,\n               source_transcript_id=excluded.source_transcript_id, source_prd_id=excluded.source_prd_id, parent_task_id=excluded.parent_task_id, subtask_ids_json=excluded.subtask_ids_json,\n               created_at=excluded.created_at, updated_at=excluded.updated_at,\n               enhancements_json=excluded.enhancements_json, comprehension_tests_json=excluded.comprehension_tests_json,\n               complexity=excluded.complexity, reasoning=excluded.reasoning, context_files_json=excluded.context_files_json, dependencies_json=excluded.dependencies_json, completion_summary=excluded.completion_summary, sort_order=excluded.sort_order"
         )
         .bind(entity.id)
         .bind(entity.title)
         .bind(entity.description)
-        .bind(entity.assignee)
+        .bind(&entity.agent_persona)
         .bind(entity.due_date)
         .bind(status_str)
         .bind(entity.source_transcript_id)
@@ -287,6 +556,7 @@ impl SqliteTaskAdapter {
         .bind(context_files_json)
         .bind(dependencies_json)
         .bind(entity.completion_summary)
+        .bind(entity.sort_order)
         .execute(&self.pool)
         .await
         .map_err(|e| {
@@ -305,7 +575,7 @@ impl SqliteTaskAdapter {
         match filter {
             crate::ports::task_repository_port::TaskFilter::ById(id) => {
                 let row = sqlx::query(
-                    "SELECT id, title, description, assignee, due_date, status, source_transcript_id, source_prd_id, parent_task_id, subtask_ids_json, created_at, updated_at, enhancements_json, comprehension_tests_json, complexity, reasoning, context_files_json, dependencies_json, completion_summary FROM tasks WHERE id = ?1"
+                    "SELECT id, title, description, agent_persona, due_date, status, source_transcript_id, source_prd_id, parent_task_id, subtask_ids_json, created_at, updated_at, enhancements_json, comprehension_tests_json, complexity, reasoning, context_files_json, dependencies_json, completion_summary, sort_order FROM tasks WHERE id = ?1"
                 )
                 .bind(id)
                 .fetch_optional(&self.pool)
@@ -320,7 +590,7 @@ impl SqliteTaskAdapter {
             crate::ports::task_repository_port::TaskFilter::ByStatus(status) => {
                 let status_str = serde_json::to_string(status).map_err(|e| hexser::error::hex_error::Hexserror::Adapter(hexser::error::adapter_error::mapping_failure(std::format!("serde error: {:?}", e).as_str())))?;
                 let row = sqlx::query(
-                    "SELECT id, title, description, assignee, due_date, status, source_transcript_id, source_prd_id, parent_task_id, subtask_ids_json, created_at, updated_at, enhancements_json, comprehension_tests_json, complexity, reasoning, context_files_json, dependencies_json, completion_summary FROM tasks WHERE status = ?1 LIMIT 1"
+                    "SELECT id, title, description, agent_persona, due_date, status, source_transcript_id, source_prd_id, parent_task_id, subtask_ids_json, created_at, updated_at, enhancements_json, comprehension_tests_json, complexity, reasoning, context_files_json, dependencies_json, completion_summary, sort_order FROM tasks WHERE status = ?1 LIMIT 1"
                 )
                 .bind(status_str)
                 .fetch_optional(&self.pool)
@@ -328,9 +598,9 @@ impl SqliteTaskAdapter {
                 .map_err(|e| { let msg = std::format!("sqlx error: {:?}", e); hexser::error::hex_error::Hexserror::Adapter(hexser::error::adapter_error::connection_failed("SQLite", msg.as_str())) })?;
                 if let std::option::Option::Some(r) = row { std::result::Result::Ok(std::option::Option::Some(Self::row_to_task(&r)?)) } else { std::result::Result::Ok(std::option::Option::None) }
             }
-            crate::ports::task_repository_port::TaskFilter::ByAssignee(assignee) => {
+            crate::ports::task_repository_port::TaskFilter::ByAgentPersona(assignee) => {
                 let row = sqlx::query(
-                    "SELECT id, title, description, assignee, due_date, status, source_transcript_id, source_prd_id, parent_task_id, subtask_ids_json, created_at, updated_at, enhancements_json, comprehension_tests_json, complexity, reasoning, context_files_json, dependencies_json, completion_summary FROM tasks WHERE assignee = ?1 LIMIT 1"
+                    "SELECT id, title, description, agent_persona, due_date, status, source_transcript_id, source_prd_id, parent_task_id, subtask_ids_json, created_at, updated_at, enhancements_json, comprehension_tests_json, complexity, reasoning, context_files_json, dependencies_json, completion_summary, sort_order FROM tasks WHERE agent_persona = ?1 LIMIT 1"
                 )
                 .bind(assignee)
                 .fetch_optional(&self.pool)
@@ -340,7 +610,7 @@ impl SqliteTaskAdapter {
             }
             crate::ports::task_repository_port::TaskFilter::All => {
                 let row = sqlx::query(
-                    "SELECT id, title, description, assignee, due_date, status, source_transcript_id, source_prd_id, parent_task_id, subtask_ids_json, created_at, updated_at, enhancements_json, comprehension_tests_json, complexity, reasoning, context_files_json, dependencies_json, completion_summary FROM tasks LIMIT 1"
+                    "SELECT id, title, description, agent_persona, due_date, status, source_transcript_id, source_prd_id, parent_task_id, subtask_ids_json, created_at, updated_at, enhancements_json, comprehension_tests_json, complexity, reasoning, context_files_json, dependencies_json, completion_summary, sort_order FROM tasks LIMIT 1"
                 )
                 .fetch_optional(&self.pool)
                 .await
@@ -357,10 +627,10 @@ impl SqliteTaskAdapter {
     ) -> hexser::HexResult<std::vec::Vec<crate::domain::task::Task>> {
         // Base SQL and bind flag
         let mut sql = match filter {
-            crate::ports::task_repository_port::TaskFilter::ById(_) => "SELECT id, title, description, assignee, due_date, status, source_transcript_id, source_prd_id, parent_task_id, subtask_ids_json, created_at, updated_at, enhancements_json, comprehension_tests_json, complexity, reasoning, context_files_json, dependencies_json, completion_summary FROM tasks WHERE id = ?1".to_string(),
-            crate::ports::task_repository_port::TaskFilter::ByStatus(_) => "SELECT id, title, description, assignee, due_date, status, source_transcript_id, source_prd_id, parent_task_id, subtask_ids_json, created_at, updated_at, enhancements_json, comprehension_tests_json, complexity, reasoning, context_files_json, dependencies_json, completion_summary FROM tasks WHERE status = ?1".to_string(),
-            crate::ports::task_repository_port::TaskFilter::ByAssignee(_) => "SELECT id, title, description, assignee, due_date, status, source_transcript_id, source_prd_id, parent_task_id, subtask_ids_json, created_at, updated_at, enhancements_json, comprehension_tests_json, complexity, reasoning, context_files_json, dependencies_json, completion_summary FROM tasks WHERE assignee = ?1".to_string(),
-            crate::ports::task_repository_port::TaskFilter::All => "SELECT id, title, description, assignee, due_date, status, source_transcript_id, source_prd_id, parent_task_id, subtask_ids_json, created_at, updated_at, enhancements_json, comprehension_tests_json, complexity, reasoning, context_files_json, dependencies_json, completion_summary FROM tasks".to_string(),
+            crate::ports::task_repository_port::TaskFilter::ById(_) => "SELECT id, title, description, agent_persona, due_date, status, source_transcript_id, source_prd_id, parent_task_id, subtask_ids_json, created_at, updated_at, enhancements_json, comprehension_tests_json, complexity, reasoning, context_files_json, dependencies_json, completion_summary, sort_order FROM tasks WHERE id = ?1".to_string(),
+            crate::ports::task_repository_port::TaskFilter::ByStatus(_) => "SELECT id, title, description, agent_persona, due_date, status, source_transcript_id, source_prd_id, parent_task_id, subtask_ids_json, created_at, updated_at, enhancements_json, comprehension_tests_json, complexity, reasoning, context_files_json, dependencies_json, completion_summary, sort_order FROM tasks WHERE status = ?1".to_string(),
+            crate::ports::task_repository_port::TaskFilter::ByAgentPersona(_) => "SELECT id, title, description, agent_persona, due_date, status, source_transcript_id, source_prd_id, parent_task_id, subtask_ids_json, created_at, updated_at, enhancements_json, comprehension_tests_json, complexity, reasoning, context_files_json, dependencies_json, completion_summary, sort_order FROM tasks WHERE agent_persona = ?1".to_string(),
+            crate::ports::task_repository_port::TaskFilter::All => "SELECT id, title, description, agent_persona, due_date, status, source_transcript_id, source_prd_id, parent_task_id, subtask_ids_json, created_at, updated_at, enhancements_json, comprehension_tests_json, complexity, reasoning, context_files_json, dependencies_json, completion_summary, sort_order FROM tasks".to_string(),
         };
 
         // ORDER BY
@@ -373,6 +643,7 @@ impl SqliteTaskAdapter {
                     crate::ports::task_repository_port::TaskSortKey::Status => "status",
                     crate::ports::task_repository_port::TaskSortKey::Title => "title",
                     crate::ports::task_repository_port::TaskSortKey::DueDate => "due_date",
+                    crate::ports::task_repository_port::TaskSortKey::SortOrder => "sort_order",
                 };
                 let dir = if s.direction == hexser::ports::repository::Direction::Desc { "DESC" } else { "ASC" };
                 parts.push(std::format!("{} {}", col, dir));
@@ -409,7 +680,7 @@ impl SqliteTaskAdapter {
                     .await
                     .map_err(|e| { let msg = std::format!("sqlx error: {:?}", e); hexser::error::hex_error::Hexserror::Adapter(hexser::error::adapter_error::connection_failed("SQLite", msg.as_str())) })?;
             }
-            crate::ports::task_repository_port::TaskFilter::ByAssignee(assignee) => {
+            crate::ports::task_repository_port::TaskFilter::ByAgentPersona(assignee) => {
                 rows = sqlx::query(sql.as_str())
                     .bind(assignee)
                     .fetch_all(&self.pool)
@@ -434,7 +705,7 @@ impl SqliteTaskAdapter {
         let id: String = sqlx::Row::get(row, 0);
         let title: String = sqlx::Row::get(row, 1);
         let description: String = sqlx::Row::get(row, 2);
-        let assignee: std::option::Option<String> = sqlx::Row::get(row, 3);
+        let agent_persona: std::option::Option<String> = sqlx::Row::get(row, 3);
         let due_date: std::option::Option<String> = sqlx::Row::get(row, 4);
         let status_str: String = sqlx::Row::get(row, 5);
         let status: crate::domain::task_status::TaskStatus = serde_json::from_str(status_str.as_str()).map_err(|e| hexser::error::hex_error::Hexserror::Adapter(hexser::error::adapter_error::mapping_failure(std::format!("serde error: {:?}", e).as_str())))?;
@@ -483,11 +754,12 @@ impl SqliteTaskAdapter {
             std::option::Option::None => std::vec::Vec::new(),
         };
         let completion_summary: std::option::Option<String> = sqlx::Row::get(row, 18);
+        let sort_order: std::option::Option<i32> = sqlx::Row::get(row, 19);
         std::result::Result::Ok(crate::domain::task::Task {
             id,
             title,
             description,
-            assignee,
+            agent_persona,
             due_date,
             status,
             source_transcript_id,
@@ -503,7 +775,119 @@ impl SqliteTaskAdapter {
             completion_summary,
             context_files,
             dependencies,
+            sort_order,
         })
+    }
+
+    /// Links a task to multiple artifacts with relevance scores.
+    ///
+    /// Creates entries in the task_artifacts junction table for semantic
+    /// relationships between tasks and PRD artifact chunks.
+    ///
+    /// # Arguments
+    ///
+    /// * `task_id` - The task to link artifacts to
+    /// * `artifact_scores` - Vector of (artifact_id, relevance_score) tuples
+    ///
+    /// # Returns
+    ///
+    /// Number of links created, or error on failure.
+    pub async fn link_task_to_artifacts(
+        &self,
+        task_id: &str,
+        artifact_scores: &[(String, f32)],
+    ) -> std::result::Result<usize, String> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let mut count = 0;
+
+        for (artifact_id, score) in artifact_scores {
+            let result = sqlx::query(
+                "INSERT OR REPLACE INTO task_artifacts (task_id, artifact_id, relevance_score, created_at)
+                 VALUES (?1, ?2, ?3, ?4)"
+            )
+            .bind(task_id)
+            .bind(artifact_id)
+            .bind(score)
+            .bind(&now)
+            .execute(&self.pool)
+            .await;
+
+            if result.is_ok() {
+                count += 1;
+            }
+        }
+
+        std::result::Result::Ok(count)
+    }
+
+    /// Retrieves all artifacts linked to a task, ordered by relevance score.
+    ///
+    /// # Arguments
+    ///
+    /// * `task_id` - The task to get artifacts for
+    ///
+    /// # Returns
+    ///
+    /// Vector of (artifact_id, relevance_score) tuples, highest score first.
+    pub async fn get_artifacts_for_task(
+        &self,
+        task_id: &str,
+    ) -> std::result::Result<std::vec::Vec<(String, f32)>, String> {
+        let rows = sqlx::query(
+            "SELECT artifact_id, relevance_score FROM task_artifacts
+             WHERE task_id = ?1
+             ORDER BY relevance_score DESC"
+        )
+        .bind(task_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| std::format!("Failed to query task artifacts: {:?}", e))?;
+
+        let results: std::vec::Vec<(String, f32)> = rows
+            .iter()
+            .map(|row| {
+                let artifact_id: String = sqlx::Row::get(row, "artifact_id");
+                let score: f64 = sqlx::Row::get(row, "relevance_score");
+                (artifact_id, score as f32)
+            })
+            .collect();
+
+        std::result::Result::Ok(results)
+    }
+
+    /// Retrieves all tasks linked to an artifact, ordered by relevance score.
+    ///
+    /// # Arguments
+    ///
+    /// * `artifact_id` - The artifact to get tasks for
+    ///
+    /// # Returns
+    ///
+    /// Vector of (task_id, relevance_score) tuples, highest score first.
+    pub async fn get_tasks_for_artifact(
+        &self,
+        artifact_id: &str,
+    ) -> std::result::Result<std::vec::Vec<(String, f32)>, String> {
+        let rows = sqlx::query(
+            "SELECT task_id, relevance_score FROM task_artifacts
+             WHERE artifact_id = ?1
+             ORDER BY relevance_score DESC"
+        )
+        .bind(artifact_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| std::format!("Failed to query artifact tasks: {:?}", e))?;
+
+        let results: std::vec::Vec<(String, f32)> = rows
+            .iter()
+            .map(|row| {
+                let task_id: String = sqlx::Row::get(row, "task_id");
+                let score: f64 = sqlx::Row::get(row, "relevance_score");
+                (task_id, score as f32)
+            })
+            .collect();
+
+        std::result::Result::Ok(results)
     }
 }
 
@@ -542,7 +926,7 @@ mod tests {
         let adapter = super::SqliteTaskAdapter::connect_and_init("sqlite::memory:").await.unwrap();
         let action = transcript_extractor::domain::action_item::ActionItem {
             title: std::string::String::from("SQLite Task"),
-            assignee: std::option::Option::Some(std::string::String::from("Alice")),
+            assignee: std::option::Option::Some(std::string::String::from("Backend Developer")),
             due_date: std::option::Option::None,
         };
         let mut task = crate::domain::task::Task::from_action_item(&action, std::option::Option::None);
@@ -559,7 +943,7 @@ mod tests {
         std::assert!(got.is_some());
         let t = got.unwrap();
         std::assert_eq!(t.title, std::string::String::from("SQLite Task"));
-        std::assert_eq!(t.assignee, std::option::Option::Some(std::string::String::from("Alice")));
+        std::assert_eq!(t.agent_persona, std::option::Option::Some(std::string::String::from("Backend Developer")));
     }
 
     #[tokio::test]
@@ -645,7 +1029,7 @@ mod tests {
 
         let action = transcript_extractor::domain::action_item::ActionItem {
             title: std::string::String::from("Initial Title"),
-            assignee: std::option::Option::Some(std::string::String::from("Bob")),
+            assignee: std::option::Option::Some(std::string::String::from("QA Engineer")),
             due_date: std::option::Option::None,
         };
         let mut t = crate::domain::task::Task::from_action_item(&action, std::option::Option::None);
@@ -666,7 +1050,7 @@ mod tests {
 
         std::assert_eq!(got.title, std::string::String::from("Updated Title"));
         std::assert_eq!(got.status, crate::domain::task_status::TaskStatus::Completed);
-        std::assert_eq!(got.assignee, std::option::Option::Some(std::string::String::from("Bob")));
+        std::assert_eq!(got.agent_persona, std::option::Option::Some(std::string::String::from("QA Engineer")));
     }
 
 }

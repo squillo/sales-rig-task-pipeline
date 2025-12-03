@@ -1,7 +1,7 @@
 //! Provider Factory for creating LLM adapters with vendor agnosticism.
 //!
 //! This factory creates adapter instances that implement the various ports
-//! (TaskEnhancementPort, ComprehensionTestPort, PRDParserPort) using different
+//! (TaskEnhancementPort, ComprehensionTestPort, PRDParserPort, EmbeddingPort) using different
 //! LLM providers (Ollama, OpenAI, Anthropic) based on configuration.
 //!
 //! The factory reads provider configuration from environment variables:
@@ -10,10 +10,17 @@
 //! - `OPENAI_MODEL`: Model name for OpenAI (default: "gpt-4")
 //! - `ANTHROPIC_MODEL`: Model name for Anthropic (default: "claude-3-5-sonnet-20241022")
 //! - `MLX_MODEL`: Model name for MLX (default: "mlx-community/Phi-3-mini-4k-instruct")
+//! - `OLLAMA_EMBEDDING_MODEL`: Embedding model for Ollama (default: "nomic-embed-text")
+//! - `OPENAI_EMBEDDING_MODEL`: Embedding model for OpenAI (default: "text-embedding-3-small")
+//! - `OLLAMA_VISION_MODEL`: Vision model for Ollama (default: "llava")
+//! - `OPENAI_VISION_MODEL`: Vision model for OpenAI (default: "gpt-4o")
+//! - `ANTHROPIC_VISION_MODEL`: Vision model for Anthropic (default: "claude-3-5-sonnet-20241022")
 //! - `OPENAI_API_KEY`: API key for OpenAI
 //! - `ANTHROPIC_API_KEY`: API key for Anthropic
 //!
 //! Revision History
+//! - 2025-11-30T11:25:00Z @AI: Add vision adapter creation for Phase 5 image processing implementation.
+//! - 2025-11-28T20:00:00Z @AI: Add embedding adapter creation for Phase 3 RAG implementation (Task 3.2).
 //! - 2025-11-24T00:20:00Z @AI: Add MLX provider support for macOS Apple Silicon optimization (Phase 5 Sprint 11 Task 5.8).
 //! - 2025-11-23T22:30:00Z @AI: Add ModelRole-based adapter creation for heterogeneous pipeline (Phase 5 Sprint 10 Task 5.2/5.3).
 //! - 2025-11-23 @AI: Create ProviderFactory for vendor-agnostic LLM providers (Phase 1 Sprint 3 Task 1.9).
@@ -474,6 +481,169 @@ impl ProviderFactory {
             )),
         }
     }
+
+    /// Creates an EmbeddingPort adapter for the configured provider.
+    ///
+    /// This method creates embedding generation adapters for RAG (Retrieval-Augmented
+    /// Generation) systems. The embedding model is selected based on the provider
+    /// and can be overridden with environment variables.
+    ///
+    /// # Returns
+    ///
+    /// Returns an Arc-wrapped implementation of EmbeddingPort.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Provider is not supported
+    /// - Required API keys are missing
+    /// - Adapter creation fails
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use task_orchestrator::adapters::provider_factory::ProviderFactory;
+    ///
+    /// let factory = ProviderFactory::from_env().unwrap();
+    /// let embedding_adapter = factory.create_embedding_adapter().unwrap();
+    /// ```
+    pub fn create_embedding_adapter(
+        &self,
+    ) -> hexser::HexResult<std::sync::Arc<dyn crate::ports::embedding_port::EmbeddingPort + std::marker::Send + std::marker::Sync>> {
+        match self.provider.as_str() {
+            "ollama" => {
+                // Get embedding model from environment or use default
+                let embedding_model = std::env::var("OLLAMA_EMBEDDING_MODEL")
+                    .unwrap_or_else(|_| "nomic-embed-text".to_string());
+
+                let adapter = crate::adapters::rig_embedding_adapter::RigEmbeddingAdapter::new_ollama(
+                    embedding_model,
+                );
+                std::result::Result::Ok(std::sync::Arc::new(adapter))
+            }
+            "openai" => {
+                // Verify API key is set
+                let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
+                    hexser::Hexserror::adapter(
+                        "MISSING_API_KEY",
+                        "OPENAI_API_KEY environment variable is required for OpenAI provider"
+                    )
+                })?;
+
+                // Get embedding model from environment or use default
+                let embedding_model = std::env::var("OPENAI_EMBEDDING_MODEL")
+                    .unwrap_or_else(|_| "text-embedding-3-small".to_string());
+
+                let adapter = crate::adapters::rig_embedding_adapter::RigEmbeddingAdapter::new_openai(
+                    api_key,
+                    embedding_model,
+                );
+                std::result::Result::Ok(std::sync::Arc::new(adapter))
+            }
+            "anthropic" | "mlx" => {
+                // Anthropic doesn't have native embedding models; MLX is for local inference
+                std::result::Result::Err(hexser::Hexserror::adapter(
+                    "NOT_SUPPORTED",
+                    &std::format!("Embedding generation not supported for provider: {}. Use ollama or openai.", self.provider)
+                ))
+            }
+            _ => std::result::Result::Err(hexser::Hexserror::adapter(
+                "UNSUPPORTED_PROVIDER",
+                &std::format!("Unsupported provider: {}", self.provider)
+            )),
+        }
+    }
+
+    /// Creates a VisionPort adapter for the configured provider.
+    ///
+    /// This method creates vision-capable LLM adapters for describing images and
+    /// PDF pages. Vision models are selected based on the provider and can be
+    /// overridden with environment variables.
+    ///
+    /// # Returns
+    ///
+    /// Returns an Arc-wrapped implementation of VisionPort.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Provider is not supported for vision (MLX doesn't have vision models)
+    /// - Required API keys are missing
+    /// - Adapter creation fails
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use task_orchestrator::adapters::provider_factory::ProviderFactory;
+    ///
+    /// let factory = ProviderFactory::from_env().unwrap();
+    /// let vision_adapter = factory.create_vision_adapter().unwrap();
+    /// ```
+    pub fn create_vision_adapter(
+        &self,
+    ) -> hexser::HexResult<std::sync::Arc<dyn crate::ports::vision_port::VisionPort + std::marker::Send + std::marker::Sync>> {
+        match self.provider.as_str() {
+            "ollama" => {
+                // Get vision model from environment or use default
+                let vision_model = std::env::var("OLLAMA_VISION_MODEL")
+                    .unwrap_or_else(|_| "llava".to_string());
+
+                let adapter = crate::adapters::rig_vision_adapter::RigVisionAdapter::new_ollama(
+                    vision_model,
+                );
+                std::result::Result::Ok(std::sync::Arc::new(adapter))
+            }
+            "openai" => {
+                // Verify API key is set
+                let api_key = std::env::var("OPENAI_API_KEY").map_err(|_| {
+                    hexser::Hexserror::adapter(
+                        "MISSING_API_KEY",
+                        "OPENAI_API_KEY environment variable is required for OpenAI provider"
+                    )
+                })?;
+
+                // Get vision model from environment or use default
+                let vision_model = std::env::var("OPENAI_VISION_MODEL")
+                    .unwrap_or_else(|_| "gpt-4o".to_string());
+
+                let adapter = crate::adapters::rig_vision_adapter::RigVisionAdapter::new_openai(
+                    api_key,
+                    vision_model,
+                );
+                std::result::Result::Ok(std::sync::Arc::new(adapter))
+            }
+            "anthropic" => {
+                // Verify API key is set
+                let api_key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
+                    hexser::Hexserror::adapter(
+                        "MISSING_API_KEY",
+                        "ANTHROPIC_API_KEY environment variable is required for Anthropic provider"
+                    )
+                })?;
+
+                // Get vision model from environment or use default
+                let vision_model = std::env::var("ANTHROPIC_VISION_MODEL")
+                    .unwrap_or_else(|_| "claude-3-5-sonnet-20241022".to_string());
+
+                let adapter = crate::adapters::rig_vision_adapter::RigVisionAdapter::new_anthropic(
+                    api_key,
+                    vision_model,
+                );
+                std::result::Result::Ok(std::sync::Arc::new(adapter))
+            }
+            "mlx" => {
+                // MLX is for local inference and doesn't have vision models
+                std::result::Result::Err(hexser::Hexserror::adapter(
+                    "NOT_SUPPORTED",
+                    "Vision capability not supported for MLX provider. Use ollama, openai, or anthropic."
+                ))
+            }
+            _ => std::result::Result::Err(hexser::Hexserror::adapter(
+                "UNSUPPORTED_PROVIDER",
+                &std::format!("Unsupported provider: {}", self.provider)
+            )),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -638,5 +808,149 @@ mod tests {
             crate::domain::model_role::ModelRole::Tester
         );
         std::assert_eq!(tester_model, "mistral");
+    }
+
+    #[test]
+    fn test_create_embedding_adapter_ollama() {
+        // Test: Validates Ollama embedding adapter creation.
+        // Justification: Ensures factory creates valid embedding adapter for RAG.
+        let factory = ProviderFactory::new("ollama", "llama3.1").unwrap();
+        let adapter = factory.create_embedding_adapter();
+        std::assert!(adapter.is_ok());
+    }
+
+    #[test]
+    fn test_create_embedding_adapter_openai_without_api_key() {
+        // Test: Validates OpenAI embedding adapter requires API key.
+        // Justification: Should fail gracefully if OPENAI_API_KEY is missing.
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+
+        let factory = ProviderFactory::new("openai", "gpt-4").unwrap();
+        let result = factory.create_embedding_adapter();
+
+        std::assert!(result.is_err());
+        if let std::result::Result::Err(e) = result {
+            std::assert!(e.to_string().contains("OPENAI_API_KEY"));
+        }
+    }
+
+    #[test]
+    fn test_create_embedding_adapter_anthropic_not_supported() {
+        // Test: Validates Anthropic embedding adapter is not supported.
+        // Justification: Anthropic doesn't provide embedding models.
+        let factory = ProviderFactory::new("anthropic", "claude-3-5-sonnet-20241022").unwrap();
+        let result = factory.create_embedding_adapter();
+
+        std::assert!(result.is_err());
+        if let std::result::Result::Err(e) = result {
+            std::assert!(e.to_string().contains("not supported"));
+        }
+    }
+
+    #[test]
+    fn test_create_embedding_adapter_mlx_not_supported() {
+        // Test: Validates MLX embedding adapter is not supported.
+        // Justification: MLX is for local inference, not embedding generation.
+        let factory = ProviderFactory::new("mlx", "mlx-community/Phi-3-mini-4k-instruct").unwrap();
+        let result = factory.create_embedding_adapter();
+
+        std::assert!(result.is_err());
+        if let std::result::Result::Err(e) = result {
+            std::assert!(e.to_string().contains("not supported"));
+        }
+    }
+
+    #[test]
+    fn test_embedding_model_from_environment() {
+        // Test: Validates embedding model can be overridden via environment variable.
+        // Justification: Enables users to customize embedding models for specific use cases.
+        unsafe {
+            std::env::set_var("OLLAMA_EMBEDDING_MODEL", "all-minilm");
+        }
+
+        let factory = ProviderFactory::new("ollama", "llama3.1").unwrap();
+        let adapter = factory.create_embedding_adapter();
+        std::assert!(adapter.is_ok());
+
+        // Cleanup
+        unsafe {
+            std::env::remove_var("OLLAMA_EMBEDDING_MODEL");
+        }
+    }
+
+    #[test]
+    fn test_create_vision_adapter_ollama() {
+        // Test: Validates Ollama vision adapter creation.
+        // Justification: Ensures factory creates valid vision adapter with llava model.
+        let factory = ProviderFactory::new("ollama", "llama3.1").unwrap();
+        let adapter = factory.create_vision_adapter();
+        std::assert!(adapter.is_ok());
+    }
+
+    #[test]
+    fn test_create_vision_adapter_openai_without_api_key() {
+        // Test: Validates OpenAI vision adapter requires API key.
+        // Justification: Should fail gracefully if OPENAI_API_KEY is missing.
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+
+        let factory = ProviderFactory::new("openai", "gpt-4").unwrap();
+        let result = factory.create_vision_adapter();
+
+        std::assert!(result.is_err());
+        if let std::result::Result::Err(e) = result {
+            std::assert!(e.to_string().contains("OPENAI_API_KEY"));
+        }
+    }
+
+    #[test]
+    fn test_create_vision_adapter_anthropic_without_api_key() {
+        // Test: Validates Anthropic vision adapter requires API key.
+        // Justification: Should fail gracefully if ANTHROPIC_API_KEY is missing.
+        unsafe {
+            std::env::remove_var("ANTHROPIC_API_KEY");
+        }
+
+        let factory = ProviderFactory::new("anthropic", "claude-3-5-sonnet-20241022").unwrap();
+        let result = factory.create_vision_adapter();
+
+        std::assert!(result.is_err());
+        if let std::result::Result::Err(e) = result {
+            std::assert!(e.to_string().contains("ANTHROPIC_API_KEY"));
+        }
+    }
+
+    #[test]
+    fn test_create_vision_adapter_mlx_not_supported() {
+        // Test: Validates MLX vision adapter is not supported.
+        // Justification: MLX doesn't have vision-capable models.
+        let factory = ProviderFactory::new("mlx", "mlx-community/Phi-3-mini-4k-instruct").unwrap();
+        let result = factory.create_vision_adapter();
+
+        std::assert!(result.is_err());
+        if let std::result::Result::Err(e) = result {
+            std::assert!(e.to_string().contains("not supported"));
+        }
+    }
+
+    #[test]
+    fn test_vision_model_from_environment() {
+        // Test: Validates vision model can be overridden via environment variable.
+        // Justification: Enables users to customize vision models for specific use cases.
+        unsafe {
+            std::env::set_var("OLLAMA_VISION_MODEL", "llava-llama3");
+        }
+
+        let factory = ProviderFactory::new("ollama", "llama3.1").unwrap();
+        let adapter = factory.create_vision_adapter();
+        std::assert!(adapter.is_ok());
+
+        // Cleanup
+        unsafe {
+            std::env::remove_var("OLLAMA_VISION_MODEL");
+        }
     }
 }

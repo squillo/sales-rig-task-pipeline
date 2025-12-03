@@ -79,7 +79,7 @@ impl RiggerServiceImpl {
         Task {
             id: task.id.clone(),
             title: task.title.clone(),
-            assignee: task.assignee.clone(),
+            assignee: task.agent_persona.clone(),
             due_date: task.due_date.clone(),
             status: self.status_to_proto(&task.status) as i32,
             source_transcript_id: task.source_transcript_id.clone(),
@@ -148,7 +148,7 @@ impl RiggerService for RiggerServiceImpl {
             let domain_status = self.proto_to_status(status)?;
             task_manager::ports::task_repository_port::TaskFilter::ByStatus(domain_status)
         } else if let std::option::Option::Some(assignee) = req.assignee {
-            task_manager::ports::task_repository_port::TaskFilter::ByAssignee(assignee)
+            task_manager::ports::task_repository_port::TaskFilter::ByAgentPersona(assignee)
         } else {
             task_manager::ports::task_repository_port::TaskFilter::All
         };
@@ -245,7 +245,7 @@ impl RiggerService for RiggerServiceImpl {
             task.status = self.proto_to_status(status)?;
         }
         if let std::option::Option::Some(assignee) = req.assignee {
-            task.assignee = std::option::Option::Some(assignee);
+            task.agent_persona = std::option::Option::Some(assignee);
         }
         if let std::option::Option::Some(due_date) = req.due_date {
             task.due_date = std::option::Option::Some(due_date);

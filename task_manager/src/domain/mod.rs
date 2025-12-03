@@ -6,6 +6,8 @@
 //! sorting/ordering utilities.
 //!
 //! Revision History
+//! - 2025-11-30T18:30:00Z @AI: Add scan_config module for artifact generator directory scanning configuration.
+//! - 2025-11-28T19:00:00Z @AI: Add artifact module for RAG knowledge storage entity.
 //! - 2025-11-26T07:10:00Z @AI: Add agent_tool and persona modules for Phase 1 persona management with agent tool configuration.
 //! - 2025-11-24T05:00:00Z @AI: Add project module for Phase 1 TUI project architecture (top-level organizational entity).
 //! - 2025-11-23T15:45:00Z @AI: Add services module for Phase 2 Sprint 5 domain intelligence services.
@@ -28,3 +30,5 @@ pub mod project_context;
 pub mod services;
 pub mod agent_tool;
 pub mod persona;
+pub mod artifact;
+pub mod scan_config;

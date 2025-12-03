@@ -62,8 +62,8 @@ impl OllamaComprehensionTestAdapter {
         prompt.push_str("# Task Information\n\n");
         prompt.push_str(&std::format!("**Title:** {}\n", task.title));
 
-        if let std::option::Option::Some(ref assignee) = task.assignee {
-            prompt.push_str(&std::format!("**Assignee:** {}\n", assignee));
+        if let std::option::Option::Some(ref agent_persona) = task.agent_persona {
+            prompt.push_str(&std::format!("**Assignee Persona:** {}\n", agent_persona));
         }
 
         if let std::option::Option::Some(ref due_date) = task.due_date {
@@ -205,7 +205,7 @@ mod tests {
         // Justification: Completion API needs complete context for quality generation.
         let action = transcript_extractor::domain::action_item::ActionItem {
             title: std::string::String::from("Implement authentication system"),
-            assignee: std::option::Option::Some(std::string::String::from("Alice")),
+            assignee: std::option::Option::Some(std::string::String::from("Backend Developer")),
             due_date: std::option::Option::Some(std::string::String::from("2025-12-01")),
         };
         let task = task_manager::domain::task::Task::from_action_item(&action, std::option::Option::None);
@@ -213,7 +213,7 @@ mod tests {
         let prompt = super::OllamaComprehensionTestAdapter::build_prompt(&task, "short_answer");
 
         std::assert!(prompt.contains("Implement authentication system"), "Prompt should include task title");
-        std::assert!(prompt.contains("Alice"), "Prompt should include assignee");
+        std::assert!(prompt.contains("Backend Developer"), "Prompt should include assignee persona");
         std::assert!(prompt.contains("2025-12-01"), "Prompt should include due date");
         std::assert!(prompt.contains("short_answer"), "Prompt should mention test type");
         std::assert!(prompt.contains("under 60 characters"), "Prompt should specify length constraint");

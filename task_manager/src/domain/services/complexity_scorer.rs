@@ -120,8 +120,8 @@ impl ComplexityScorer {
             score += 2;
         }
 
-        // +1 if assignee is None (unclear ownership)
-        if task.assignee.is_none() {
+        // +1 if agent_persona is None (unclear ownership)
+        if task.agent_persona.is_none() {
             score += 1;
         }
 

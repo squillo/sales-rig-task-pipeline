@@ -5,6 +5,7 @@
 //! schema-enforced extraction via rig-core and, later, a stateful graph runtime.
 //!
 //! Revision History
+//! - 2025-11-28T20:15:00Z @AI: Export services module for artifact management in Phase 3 RAG (Task 4.1).
 //! - 2025-11-23T22:05:00Z @AI: Export domain module for ModelRole and heterogeneous pipeline (Phase 5 Sprint 10).
 //! - 2025-11-23T21:32:00Z @AI: Remove utils export; all moved to infrastructure (HEXSER compliance).
 //! - 2025-11-23 @AI: Export tools module for FileSystemTool and Rig agent capabilities (Phase 4 Sprint 9 Task 4.7).
@@ -24,6 +25,7 @@ pub mod use_cases;
 pub mod architecture;
 pub mod infrastructure;
 pub mod tools;
+pub mod services;
 
 /// Returns the crate semantic version at compile time.
 ///

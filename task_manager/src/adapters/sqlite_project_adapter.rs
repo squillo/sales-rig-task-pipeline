@@ -11,6 +11,7 @@
 //! prd_ids list field.
 //!
 //! Revision History
+//! - 2025-11-30T20:00:00Z @AI: Add ALTER TABLE migration for prd_ids_json column. Handles databases created by SqliteTaskAdapter that don't have this column.
 //! - 2025-11-24T05:00:00Z @AI: Initial SqliteProjectAdapter implementation for Phase 1 TUI project architecture.
 
 /// SQLite-backed implementation of the Project repository ports.
@@ -46,6 +47,11 @@ impl SqliteProjectAdapter {
         .execute(&pool)
         .await
         .map_err(|e| std::format!("Failed to create projects schema: {:?}", e))?;
+
+        // Migration: Add prd_ids_json column if missing (for databases created by SqliteTaskAdapter)
+        let _ = sqlx::query("ALTER TABLE projects ADD COLUMN prd_ids_json TEXT NULL")
+            .execute(&pool)
+            .await; // Ignore error if column already exists
 
         std::result::Result::Ok(SqliteProjectAdapter { pool })
     }

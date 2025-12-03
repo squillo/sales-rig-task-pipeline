@@ -184,8 +184,8 @@ impl OllamaEnhancementAdapter {
         prompt.push_str(&std::format!("**Title:** {}\n", task.title));
         prompt.push_str(&std::format!("**Status:** {:?}\n", task.status));
 
-        if let std::option::Option::Some(ref assignee) = task.assignee {
-            prompt.push_str(&std::format!("**Assignee:** {}\n", assignee));
+        if let std::option::Option::Some(ref agent_persona) = task.agent_persona {
+            prompt.push_str(&std::format!("**Assignee Persona:** {}\n", agent_persona));
         }
 
         if let std::option::Option::Some(ref due_date) = task.due_date {

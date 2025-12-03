@@ -1,8 +1,10 @@
 //! Implementation of the 'rigparse <PRD_FILE>' command.
 //!
 //! Parses a PRD markdown file and generates tasks using LLM-based decomposition.
+//! Ingests PRD content into RAG knowledge base with vector embeddings for semantic search.
 //!
 //! Revision History
+//! - 2025-11-28T20:45:00Z @AI: Add RAG artifact ingestion after task generation (Phase 3 Task 4.2).
 //! - 2025-11-27T09:00:00Z @AI: Add auto-decomposition for complex tasks. After saving generated tasks, iterate through them and auto-decompose any with complexity >= 7. For each complex task: (1) call parser.decompose_task() to generate 3-5 sub-tasks, (2) save sub-tasks to database, (3) update parent task with subtask_ids and Decomposed status. Provides progress feedback ("🔄 Decomposing complex task...") and summary stats. Decomposition failures are non-fatal - logs warning and continues with original task.
 //! - 2025-11-25T20:47:00Z @AI: Fix "runtime within runtime" error by using save_async() instead of blocking save().
 //! - 2025-11-22T17:10:00Z @AI: Full implementation of parse command for Rigger Phase 0 Sprint 0.3.
@@ -153,6 +155,20 @@ pub async fn execute(prd_file: &str) -> anyhow::Result<()> {
     println!("✓ Saved {} tasks to {}", tasks.len(), db_path.display());
     println!();
 
+    // Ingest PRD content as artifacts for RAG
+    println!("📚 Ingesting PRD content for semantic search...");
+    match ingest_prd_artifacts(&prd, &prd_content, &db_url, provider, model_name).await {
+        std::result::Result::Ok(artifact_count) => {
+            println!("✓ Ingested {} knowledge artifacts with embeddings", artifact_count);
+            println!();
+        }
+        std::result::Result::Err(e) => {
+            eprintln!("⚠️  RAG ingestion failed (non-fatal): {}", e);
+            eprintln!("  → Continuing with task generation");
+            println!();
+        }
+    }
+
     // Auto-decompose complex tasks (complexity >= 7)
     let mut total_subtasks = 0;
     for task in &tasks {
@@ -211,9 +227,88 @@ pub async fn execute(prd_file: &str) -> anyhow::Result<()> {
     std::result::Result::Ok(())
 }
 
+/// Helper function to ingest PRD content as artifacts for RAG.
+///
+/// This function:
+/// 1. Creates an artifact repository adapter connected to the database
+/// 2. Creates an embedding adapter using the configured provider
+/// 3. Creates an artifact service to coordinate ingestion
+/// 4. Calls the service to chunk, embed, and persist the PRD content
+///
+/// # Arguments
+///
+/// * `prd` - The parsed PRD domain entity
+/// * `prd_content` - Full markdown text of the PRD
+/// * `db_url` - SQLite database URL
+/// * `provider` - LLM provider name (for embedding model selection)
+/// * `model_name` - Model name (for logging purposes)
+///
+/// # Returns
+///
+/// Returns the number of artifacts successfully ingested, or an error.
+///
+/// # Errors
+///
+/// This function returns errors for:
+/// - Database connection failures
+/// - Embedding adapter creation failures
+/// - Artifact ingestion failures
+async fn ingest_prd_artifacts(
+    prd: &task_manager::domain::prd::PRD,
+    prd_content: &str,
+    db_url: &str,
+    provider: &str,
+    _model_name: &str,
+) -> std::result::Result<usize, String> {
+    // 0. Ensure default project exists (for foreign key constraint)
+    let project_id = String::from("default-project");
+    let task_adapter = task_manager::adapters::sqlite_task_adapter::SqliteTaskAdapter::connect_and_init(db_url)
+        .await
+        .map_err(|e| std::format!("Failed to connect task adapter: {}", e))?;
+
+    // Create default project if it doesn't exist
+    sqlx::query("INSERT OR IGNORE INTO projects (id, name, description, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5)")
+        .bind(&project_id)
+        .bind("Default Project")
+        .bind("Auto-created default project for artifact storage")
+        .bind(chrono::Utc::now().to_rfc3339())
+        .bind(chrono::Utc::now().to_rfc3339())
+        .execute(task_adapter.pool())
+        .await
+        .map_err(|e| std::format!("Failed to create default project: {}", e))?;
+
+    // 1. Create artifact repository adapter
+    let artifact_adapter = task_manager::adapters::sqlite_artifact_adapter::SqliteArtifactAdapter::connect_and_init(db_url)
+        .await
+        .map_err(|e| std::format!("Failed to connect artifact repository: {}", e))?;
+
+    // 2. Create embedding adapter using provider factory
+    let provider_factory = task_orchestrator::adapters::provider_factory::ProviderFactory::new(provider, "default")
+        .map_err(|e| std::format!("Failed to create provider factory: {}", e))?;
+
+    let embedding_adapter = provider_factory.create_embedding_adapter()
+        .map_err(|e| std::format!("Failed to create embedding adapter: {}", e))?;
+
+    // 3. Create artifact service
+    let artifact_service = task_orchestrator::services::artifact_service::ArtifactService::new(
+        std::sync::Arc::new(std::sync::Mutex::new(artifact_adapter)),
+        embedding_adapter,
+    );
+
+    // 4. Ingest PRD content
+    let artifacts = artifact_service.ingest_prd(
+        String::from("default-project"), // Use same project ID as PRD parser
+        prd.id.clone(),
+        prd_content.to_string(),
+    ).await?;
+
+    std::result::Result::Ok(artifacts.len())
+}
+
 #[cfg(test)]
 mod tests {
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_parse_fails_without_init() {
         // Test: Validates parse command fails if .rigdoesn't exist.
         // Justification: User must run init before using other commands.
@@ -226,12 +321,13 @@ mod tests {
         let result = super::execute("nonexistent.md").await;
         std::assert!(result.is_err(), "Parse should fail if .rigdoesn't exist");
 
-        // Cleanup
-        std::env::set_current_dir(original_dir).unwrap();
-        std::fs::remove_dir_all(&temp_dir).unwrap();
+        // Cleanup (ignore errors if already cleaned)
+        let _ = std::env::set_current_dir(original_dir);
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_parse_fails_with_nonexistent_file() {
         // Test: Validates parse command fails if PRD file doesn't exist.
         // Justification: Must validate file exists before processing.
@@ -249,8 +345,51 @@ mod tests {
         std::assert!(result.is_err(), "Parse should fail if PRD file doesn't exist");
         std::assert!(result.unwrap_err().to_string().contains("not found"));
 
-        // Cleanup
-        std::env::set_current_dir(original_dir).unwrap();
-        std::fs::remove_dir_all(&temp_dir).unwrap();
+        // Cleanup (ignore errors if already cleaned)
+        let _ = std::env::set_current_dir(original_dir);
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_ingest_prd_artifacts_helper() {
+        // Test: Validates RAG artifact ingestion helper function.
+        // Justification: Ensures PRD content is chunked and embedded correctly.
+        let temp_dir = std::env::temp_dir().join(std::format!("rigger_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&temp_dir).unwrap();
+
+        let db_path = temp_dir.join("test.db");
+        let db_url = std::format!("sqlite:{}", db_path.display());
+
+        // Create sample PRD
+        let prd = task_manager::domain::prd::PRD {
+            id: String::from("test-prd-123"),
+            title: String::from("Test PRD"),
+            project_id: String::from("default-project"),
+            objectives: std::vec![String::from("Build feature")],
+            tech_stack: std::vec![String::from("Rust")],
+            constraints: std::vec![String::from("Must be fast")],
+            raw_content: String::from("# Test PRD\n\nBuild a feature."),
+            created_at: chrono::Utc::now(),
+        };
+
+        let prd_content = "# Test PRD\n\nThis is the first paragraph.\n\nThis is the second paragraph.\n\nThis is the third paragraph.";
+
+        // Call ingestion helper
+        let result = super::ingest_prd_artifacts(
+            &prd,
+            prd_content,
+            &db_url,
+            "ollama",
+            "llama3.2:latest",
+        ).await;
+
+        // Cleanup (ignore errors if already cleaned)
+        let _ = std::fs::remove_dir_all(&temp_dir);
+
+        // Validate result
+        // Note: This test will use fallback embeddings since Ollama may not be running
+        std::assert!(result.is_ok(), "Ingestion should succeed with fallback embeddings: {:?}", result);
+        let artifact_count = result.unwrap();
+        std::assert!(artifact_count >= 3, "Should create at least 3 artifacts from 3 paragraphs, got {}", artifact_count);
     }
 }

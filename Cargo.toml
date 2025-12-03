@@ -5,6 +5,9 @@
 # version management. Member crates reference these dependencies using { workspace = true }.
 #
 # Revision History
+# - 2025-11-30T19:15:00Z @AI: Add ignore crate for gitignore-aware directory scanning in artifact generator.
+# - 2025-11-29T09:30:00Z @AI: Add serial_test crate for serializing tests that change current directory.
+# - 2025-11-28T19:15:00Z @AI: Add sqlite-vec dependency for Phase 2 RAG vector search support.
 # - 2025-11-15T15:43:00Z @AI: Add CUDA alias workspace deps to allow target-gated CUDA enabling in sub-crates; prevents cudarc on macOS.
 # - 2025-11-12T17:46:00Z @AI: Add graph-flow workspace dependency with rig feature (optional integration).
 # - 2025-11-08T15:35:00Z @AI: Disable Candle default features to avoid CUDA (cudarc/nvcc) on macOS during root tests; opt-in via per-crate features.
@@ -48,6 +51,8 @@ async-trait = "0.1"
 uuid = { version = "1.11", features = ["v4", "serde"] }
 parking_lot = "0.12"
 chrono = { version = "0.4", features = ["serde"] }
+regex = "1.11"
+base64 = "0.22"
 
 # LLM integration
 ollama-rs = "0.2"
@@ -70,3 +75,17 @@ anyhow = "1.0"
 reqwest = { version = "0.12", features = ["json"] }
 # SQLite persistence toolkit (optional at crate level; enabled via features)
 sqlx = { version = "0.8", default-features = false, features = ["sqlite", "runtime-tokio-rustls"] }
+# SQLite vector search extension for RAG similarity queries
+sqlite-vec = "0.1.7-alpha.2"
+
+# PDF text extraction for Phase 6 media processing
+pdf-extract = "0.10"
+
+# Directory scanning with gitignore support for artifact generator
+ignore = "0.4"
+
+# HTML parsing for web crawler artifact generator
+scraper = "0.22"
+
+# Testing utilities
+serial_test = "3.2"

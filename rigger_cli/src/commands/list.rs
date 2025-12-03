@@ -67,7 +67,7 @@ pub async fn execute(
         };
         task_manager::ports::task_repository_port::TaskFilter::ByStatus(task_status)
     } else if let std::option::Option::Some(assignee_str) = assignee {
-        task_manager::ports::task_repository_port::TaskFilter::ByAssignee(std::string::String::from(assignee_str))
+        task_manager::ports::task_repository_port::TaskFilter::ByAgentPersona(std::string::String::from(assignee_str))
     } else {
         task_manager::ports::task_repository_port::TaskFilter::All
     };
@@ -128,6 +128,7 @@ pub async fn execute(
 #[cfg(test)]
 mod tests {
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_list_fails_without_init() {
         // Test: Validates list command fails if .rigger doesn't exist.
         // Justification: User must run init before using other commands.
@@ -145,7 +146,8 @@ mod tests {
         std::fs::remove_dir_all(&temp_dir).unwrap();
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial_test::serial]
     async fn test_list_with_empty_database() {
         // Test: Validates list handles empty database gracefully.
         // Justification: Newly initialized projects have no tasks yet.
@@ -162,8 +164,8 @@ mod tests {
         let result = super::execute(std::option::Option::None, std::option::Option::None, "created_at", std::option::Option::None, std::option::Option::None).await;
         std::assert!(result.is_ok(), "List should succeed with empty database");
 
-        // Cleanup
-        std::env::set_current_dir(original_dir).unwrap();
-        std::fs::remove_dir_all(&temp_dir).unwrap();
+        // Cleanup (ignore errors if already cleaned)
+        let _ = std::env::set_current_dir(original_dir);
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

@@ -5,6 +5,9 @@
 //! architecture and are used by the graph nodes to perform work.
 //!
 //! Revision History
+//! - 2025-11-30T20:15:00Z @AI: Add reqwest_web_crawler for Phase 3 artifact generator.
+//! - 2025-11-30T11:20:00Z @AI: Add rig_vision_adapter for Phase 5 image processing implementation.
+//! - 2025-11-28T19:45:00Z @AI: Add rig_embedding_adapter for Phase 3 RAG embedding generation.
 //! - 2025-11-24T01:35:00Z @AI: Add sqlite_metrics_collector for Phase 5 Sprint 12 Task 5.12.
 //! - 2025-11-24T01:15:00Z @AI: Add memory_metrics_collector for Phase 5 Sprint 12 Task 5.11.
 //! - 2025-11-24T00:10:00Z @AI: Add mlx_subprocess_adapter for macOS optimization (Phase 5 Sprint 11 Task 5.8).
@@ -21,3 +24,6 @@ pub mod provider_factory;
 pub mod mlx_subprocess_adapter;
 pub mod memory_metrics_collector;
 pub mod sqlite_metrics_collector;
+pub mod rig_embedding_adapter;
+pub mod rig_vision_adapter;
+pub mod reqwest_web_crawler;

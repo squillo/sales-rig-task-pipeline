@@ -68,7 +68,7 @@ async fn test_streaming_prd_generation_with_task_detection() {
                         msg
                     });
                 }
-                task_orchestrator::adapters::rig_prd_parser_adapter::PRDGenUpdate::TaskGenerated { title, description } => {
+                task_orchestrator::adapters::rig_prd_parser_adapter::PRDGenUpdate::TaskGenerated { title, description, .. } => {
                     received_task_generated = true;
                     println!("✓ Task Generated: {}", title);
                     println!("  Description: {}", description);
@@ -166,7 +166,7 @@ async fn test_streaming_prd_with_complex_json() {
 
     match tokio::time::timeout(std::time::Duration::from_secs(90), async {
         while let std::option::Option::Some(update) = update_rx.recv().await {
-            if let task_orchestrator::adapters::rig_prd_parser_adapter::PRDGenUpdate::TaskGenerated { title, description } = update {
+            if let task_orchestrator::adapters::rig_prd_parser_adapter::PRDGenUpdate::TaskGenerated { title, description, .. } = update {
                 total_tasks += 1;
                 println!("✓ Task {}: {}", total_tasks, title);
 

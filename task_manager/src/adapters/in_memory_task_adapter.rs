@@ -89,11 +89,11 @@ impl hexser::ports::repository::QueryRepository<crate::domain::task::Task>
             crate::ports::task_repository_port::TaskFilter::ByStatus(status) => {
                 tasks.values().find(|task| &task.status == status).cloned()
             }
-            crate::ports::task_repository_port::TaskFilter::ByAssignee(assignee) => {
+            crate::ports::task_repository_port::TaskFilter::ByAgentPersona(assignee) => {
                 tasks
                     .values()
                     .find(|task| {
-                        task.assignee
+                        task.agent_persona
                             .as_ref()
                             .map(|a| a == assignee)
                             .unwrap_or(false)
@@ -127,11 +127,11 @@ impl hexser::ports::repository::QueryRepository<crate::domain::task::Task>
                     .cloned()
                     .collect()
             }
-            crate::ports::task_repository_port::TaskFilter::ByAssignee(assignee) => {
+            crate::ports::task_repository_port::TaskFilter::ByAgentPersona(assignee) => {
                 tasks
                     .values()
                     .filter(|task| {
-                        task.assignee
+                        task.agent_persona
                             .as_ref()
                             .map(|a| a == assignee)
                             .unwrap_or(false)
@@ -167,6 +167,24 @@ impl hexser::ports::repository::QueryRepository<crate::domain::task::Task>
                             match (&a.due_date, &b.due_date) {
                                 (std::option::Option::Some(date_a), std::option::Option::Some(date_b)) => {
                                     date_a.cmp(date_b)
+                                }
+                                (std::option::Option::Some(_), std::option::Option::None) => {
+                                    std::cmp::Ordering::Less
+                                }
+                                (std::option::Option::None, std::option::Option::Some(_)) => {
+                                    std::cmp::Ordering::Greater
+                                }
+                                (std::option::Option::None, std::option::Option::None) => {
+                                    std::cmp::Ordering::Equal
+                                }
+                            }
+                        });
+                    }
+                    crate::ports::task_repository_port::TaskSortKey::SortOrder => {
+                        filtered.sort_by(|a, b| {
+                            match (&a.sort_order, &b.sort_order) {
+                                (std::option::Option::Some(order_a), std::option::Option::Some(order_b)) => {
+                                    order_a.cmp(order_b)
                                 }
                                 (std::option::Option::Some(_), std::option::Option::None) => {
                                     std::cmp::Ordering::Less

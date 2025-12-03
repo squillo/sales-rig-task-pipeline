@@ -61,7 +61,7 @@ pub fn display_tasks_table(tasks: &[task_manager::domain::task::Task]) {
             task.title.clone()
         };
 
-        let assignee_display = task.assignee.as_ref().map(|a| {
+        let assignee_display = task.agent_persona.as_ref().map(|a| {
             if a.len() > 15 {
                 std::format!("{}...", &a[..12])
             } else {

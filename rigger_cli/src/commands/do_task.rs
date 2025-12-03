@@ -145,6 +145,7 @@ pub async fn execute(task_id: &str) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     #[tokio::test]
+    #[serial_test::serial]
     async fn test_do_fails_without_init() {
         // Test: Validates do command fails if .rigdoesn't exist.
         // Justification: User must run init before using other commands.
@@ -162,7 +163,8 @@ mod tests {
         std::fs::remove_dir_all(&temp_dir).unwrap();
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
+    #[serial_test::serial]
     async fn test_do_fails_with_nonexistent_task() {
         // Test: Validates do command fails if task doesn't exist.
         // Justification: Must validate task exists before execution.
@@ -180,8 +182,8 @@ mod tests {
         std::assert!(result.is_err(), "Do should fail if task doesn't exist");
         std::assert!(result.unwrap_err().to_string().contains("not found"));
 
-        // Cleanup
-        std::env::set_current_dir(original_dir).unwrap();
-        std::fs::remove_dir_all(&temp_dir).unwrap();
+        // Cleanup (ignore errors if already cleaned)
+        let _ = std::env::set_current_dir(original_dir);
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

@@ -332,7 +332,7 @@ JSON Array:"#,
             .map(|extraction| {
                 let action = transcript_extractor::domain::action_item::ActionItem {
                     title: extraction.title,
-                    assignee: task.assignee.clone(),
+                    assignee: task.agent_persona.clone(),
                     due_date: task.due_date.clone(),
                 };
                 let mut subtask = task_manager::domain::task::Task::from_action_item(&action, std::option::Option::None);

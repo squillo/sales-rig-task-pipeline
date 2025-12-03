@@ -5,6 +5,36 @@
 //! reasoning display, and network request logging.
 //!
 //! Revision History
+//! - 2025-12-01T03:30:00Z @AI: Add semantic search for tasks and fix percentage display. User reported percentages not showing and requested semantic search for tasks (not just artifacts). Added cosine_similarity() helper function (lines 4288-4304) to compute similarity between embeddings. Updated search_all() to generate query embedding once and reuse for both tasks and artifacts (line 4317). For tasks: generate embeddings on-the-fly for title+description, compute similarity, filter by 0.2 threshold (lines 4323-4344). For artifacts: fixed distance-to-similarity conversion (line 4393) - artifact_adapter returns distance (0.0=identical, 2.0=opposite) but we need similarity (1.0=100%, 0.0=0%), so convert with `1.0 - (distance / 2.0)`. This fixes percentage display showing correct scores like [85%] for close matches. Tasks now show semantic scores same as artifacts. Optimized to avoid re-generating query embedding for artifacts.
+//! - 2025-12-01T03:15:00Z @AI: Relax semantic search threshold for more permissive matching. User reported "Node Distributions" query should match "Distributed system with distributed Node Systems" but didn't due to strict threshold. Increased similarity distance threshold from 0.3 to 0.8 (line 4340) to allow more distant semantic matches. Increased result limit from 10 to 30 artifacts to show broader range of relevant results. Lower threshold was missing valid semantic matches; new threshold provides better recall while maintaining relevance through scoring display.
+//! - 2025-12-01T03:00:00Z @AI: Fix K/L key bindings in spotlight and add semantic similarity scoring. Fixed issue where 'k' and 'l' keys were triggering navigation/LLM chat instead of being typed in spotlight search box. Added guard `if !app.show_spotlight_dialog` to KeyCode::Up | KeyCode::Char('k') handler (line 5957) and added `!app.show_spotlight_dialog` guard to 'l' key handler (line 6328). Added dedicated spotlight Up/Down navigation handlers (lines 6213-6218) that only use arrow keys, freeing k/j/l for text input. Added semantic similarity scoring to SearchResultType enum - all variants now have `score: Option<f32>` field (line 769). Updated search_all() to return scores from semantic vector search and rank results by score descending (lines 4347, 4372-4393). Results with scores (semantic matches) appear first sorted by confidence, followed by substring matches. Updated render_spotlight_dialog() to display scores as percentage badges [85%] next to each result (lines 9311-9315, 9337-9341, 9356-9360, 9378-9382). Scores shown in dark gray to not distract from content. All 7 tests passing.
+//! - 2025-12-01T02:30:00Z @AI: Add comprehensive tests for semantic spotlight search. Added 7 async test functions (lines 12911-13183) covering: (1) substring matching for tasks, PRDs, and projects, (2) artifact substring fallback when no adapters configured, (3) async spotlight input/backspace handlers with result updates, (4) empty query handling. Tests verify search_all() async function works correctly, spotlight handlers properly trigger search and update results, and fallback behavior works when semantic adapters unavailable. Fixed pre-existing compilation errors: added PRDProcessingState::Cancelled to match arm (line 12585), fixed Task struct field references (TaskStatus path, sort_order Option<i32>), fixed PRD struct to include objectives/tech_stack/constraints fields, fixed Project struct to include prd_ids field. All 7 tests passing successfully.
+//! - 2025-12-01T02:00:00Z @AI: Implement async semantic search for spotlight feature. Made search_all(), handle_spotlight_input(), and handle_spotlight_backspace() async to properly support semantic artifact search using embedding adapters. When user searches in spotlight (Ctrl+P), artifacts are now searched using vector similarity (0.3 threshold, top 10 results) via RigEmbeddingAdapter and SqliteArtifactAdapter when available. Falls back to substring matching if semantic search fails or adapters unavailable. Tasks/PRDs/projects continue using substring matching. Event handlers now properly await async search calls (lines 6191, 6217). Fixed "cannot start a runtime from within a runtime" panic by making entire call chain async instead of using block_on().
+//! - 2025-12-01T01:20:00Z @AI: Fix 'n' key conflict between task creator and notifications. Removed 'n' keybinding from task creator dialog (line 6162) to resolve conflict with notification center toggle. User reported that pressing 'n' was opening task creator instead of showing notifications. Now 'n' exclusively toggles notification panel (line 6199), while 'a' opens task creator. Config editor continues to use 'n' for new items (line 6063) with proper guard `app.show_config_editor`. Match statement ordering was causing task creator handler to match before notification handler, preventing notification center from opening.
+//! - 2025-12-01T01:15:00Z @AI: Fix UTF-8 boundary panic in string truncation (Critical). Fixed panic "byte index 60 is not a char boundary" at tui.rs:6855:52 in artifact viewer and 9 other locations. Root cause: direct byte-index string slicing `&s[..N]` panics when N falls inside a multi-byte UTF-8 character (emoji, accented chars, etc.). Modified truncate_string() helper to count characters instead of bytes using .chars().take(N).collect(), preventing panic on multi-byte boundaries. Updated all 10 unsafe slicing sites: artifact content preview (lines 3201, 4247, 6854), artifact ID display (4350), database table columns/values (7125, 7143, 7434, 7452), task description preview (9121), and project ID display (9775). All string truncation now UTF-8 safe and never panics on unicode content.
+//! - 2025-12-01T01:05:00Z @AI: Add progress gauge to PRD processing dialog. Implemented visual progress bar showing current step during PRD processing workflow. Added progress calculation logic mapping each PRDProcessingState to step index (1-11 out of 11 total steps). Created Gauge widget with cyan styling showing percentage complete and step label (e.g., "Step 5 of 11 - 45%"). Split dialog area into gauge section (3 lines) and content section when in-progress state is active. Gauge only appears during active processing (not for Failed or Complete states). Added conditional rendering logic to show gauge when current_step_index > 0 and state is not terminal. Progress bar provides immediate visual feedback on workflow position and estimated completion, addressing user request for better process visibility during multi-step PRD generation.
+//! - 2025-11-30T23:45:00Z @AI: Add Artifact Viewer with keyboard navigation and linked tasks display. Added ArtifactViewer variant to DashboardTool enum with "📚 Artifacts" display name. Implemented render_artifact_viewer() function showing two-panel layout: (left) list of artifacts filtered by current project with [Type] and content preview, (right) detail view showing full content, metadata, source info, creation date, and linked tasks. Added load_artifacts() method to load artifacts from SQLite using raw SQL (excludes embedding vectors for performance). Added selected_artifact state field for Up/Down navigation. Integrated keyboard handlers (Up/Down keys navigate artifact list when active_tool == ArtifactViewer). Added load_artifacts() to refresh_all_data() so artifacts load on startup. Linked tasks section shows up to 5 tasks from same source PRD with status icons (📋 Todo, 🔄 InProgress, ✓ Completed, etc.). Integrated into tool navigation cycle: Kanban → Artifacts → Metrics → DevTools. Empty state guidance shows how to generate artifacts via 'G' key or PRD parsing.
+//! - 2025-11-30T23:00:00Z @AI: Fix dashboard data disconnect - PRDs not loaded after PRD processing. Root cause: ReloadingTasks state was reloading projects and tasks but not PRDs, breaking the Task→PRD→Project filter chain. When get_filtered_tasks() tried to find tasks via PRD IDs, the prds vector was empty, filtering out all tasks. Added load_prds() call in ReloadingTasks state between load_projects() and load_tasks(). Dashboard now correctly shows tasks after PRD processing completes, with proper project grouping in Kanban board.
+//! - 2025-11-30T22:30:00Z @AI: Fix index out of bounds panic in PRD conversation rendering. Added bounds check when accessing message_items array to show fallback message. The panic occurred when start_idx (from scroll offset) was equal to message_items.len() after the message list shrank. Now clamps index to valid range with start_idx.min(message_items.len() - 1) before array access. Fixes "index out of bounds: the len is 4 but the index is 4" crash during task generation.
+//! - 2025-11-30T22:15:00Z @AI: Lower task decomposition threshold from 7 to 5. Changed complexity threshold for auto-decomposition from >= 7 to >= 5, making it more likely that moderately complex tasks will be broken down into subtasks. LLMs tend to use conservative mid-range complexity values (3-6), so the original threshold of 7 was too high and preventing decomposition. With threshold of 5, tasks at or above mid-range complexity now get decomposed into 3-5 subtasks automatically.
+//! - 2025-11-30T22:00:00Z @AI: Implement two-pass persona assignment in PRD processing. Added AssigningPersonas state to PRDProcessingState enum between SavingTasks and IngestingArtifacts. After tasks are saved, TUI now loads personas from database, creates RigPRDParserAdapter, and calls assign_persona_to_task() for each task using LLM to match task content with appropriate persona. Tasks are updated in database with assigned personas. This prevents biasing simpler LLMs during task generation - tasks are first derived from PRD content alone, then personas are assigned based on generated tasks. Non-fatal error handling - skips assignment if personas/config not available or LLM calls fail.
+//! - 2025-11-30T21:30:00Z @AI: Add task reordering and 'n' key for new task. (1) Implemented Shift+Up/Down keyboard shortcuts to reorder tasks within TODO column. Tasks swap sort_order values and persist to SQLite. Only works in TODO column per user request. (2) Added 'n' as alias for opening task creator dialog alongside existing 'a' key. Added !show_config_editor guard since 'n' is used for new items in config editor.
+//! - 2025-11-30T21:00:00Z @AI: Fix two bugs after PRD processing: (1) Zero projects showing in dashboard - added load_projects() call to ReloadingTasks state so newly created project appears after PRD is processed. (2) Tasks showing as "unassigned" - fixed personas loading to explicitly use Option<String> type annotations for nullable columns (project_id, llm_provider, llm_model), preventing potential panic on NULL values. Also added warning log messages for persona loading failures instead of silently ignoring errors.
+//! - 2025-11-30T20:15:00Z @AI: Improve database error messages in load_projects(). Now detects "no such column" and "no such table" errors and suggests deleting tasks.db and running 'rig init' to fix schema mismatches.
+//! - 2025-11-30T19:45:00Z @AI: Add Phase 6 TUI artifact generator integration. Added 'G' keyboard shortcut to open artifact generator dialog. Dialog allows entering directory path or URL for scanning/crawling. Supports both IgnoreAwareScanner for directories and ReqwestWebCrawler for URLs. Auto-generates project ID from source path/domain. Uses configured embedding provider from .rigger/config.json. Shows progress during generation and completion notification with stats (artifacts created, files/pages processed, bytes, duration). Added DummyDirectoryScanner and DummyWebCrawler structs for single-mode generation. Added shortcut to help overlay.
+//! - 2025-11-30T12:30:00Z @AI: Add ProcessingMedia state to PRD pipeline for Phase 5 vision integration. Added ProcessingMedia to PRDProcessingState enum between LoadingConfig and GeneratingTasks. Added ProcessingMedia handler in process_prd_step() that reads vision config, creates RigVisionAdapter via ProviderFactory, creates VisionService, calls process_prd_media() to scan/fetch/describe media URLs, and injects descriptions into PRD content before task generation. Updated progress steps array (now 10 steps), step indices, and spinner text. Non-fatal error handling - skips media processing if vision not configured or processing fails.
+//! - 2025-11-30T12:00:00Z @AI: Add vision slot to TUI setup wizard for Phase 4 image processing. Added ConfigureVisionSlot to SetupWizardStep enum, vision provider/model fields to App struct (setup_wizard_vision_{provider,provider_selection,model}), step transitions (Embedding→Vision→Database), navigation methods for vision slot provider selection, keyboard handlers, config.json generation including vision slot, render_wizard_configure_slot updates for Vision case (step 6, 👁️ icon, green color), task tool slots overview updated from "four" to "five" slots with Vision description, confirmation screen updated to Step 8 with Vision slot display, database configuration updated to Step 7. Default vision model is llava:latest (Ollama).
+//! - 2025-11-29T18:30:00Z @AI: Fix Project/PRD/Task relationship loading. Added needs_initial_load field to App struct to trigger data loading on first render. Added initial data loading logic to run_app() that calls refresh_all_data() on startup (skipped during setup wizard). This ensures projects, PRDs, and tasks are loaded from database when TUI starts, enabling project grouping in Kanban board. Also verified load_prds() function works correctly to load PRD records.
+//! - 2025-11-29T17:00:00Z @AI: Add project filtering to Kanban board via Navigation panel. Added "All Projects" option at top of PROJECTS list in navigation (shows total task count). Selecting a specific project filters Kanban to only show that project's tasks. Updated next_workspace()/previous_workspace() to cycle through All Projects → Project1 → Project2 → ... → All Projects. Each project in nav shows its task count. Kanban board now uses get_filtered_tasks() to respect selected project filter. Reset selection state when changing projects.
+//! - 2025-11-29T16:30:00Z @AI: Refactor Kanban board to group tasks by project within each status column. Keeps original 4-column layout (TODO, IN PROGRESS, COMPLETED, ARCHIVED/ERRORED) but within each column, tasks are grouped under project headers (e.g., "── MyProject (3) ──"). Added ProjectTaskGroup struct and group_tasks_by_project() to link tasks to projects via PRD chain. Added render_project_grouped_column() for rendering columns with project sections. Task cards now show title, agent_persona, and complexity (C:N). Added selected_project_row state field for future project-level navigation. Unassigned tasks grouped at bottom.
+//! - 2025-11-29T14:00:00Z @AI: Implement LinkingArtifacts state for semantic task-artifact matching. Added LinkingArtifacts to progress indicator steps array (index 6, bumped DecomposingTasks to 7, ReloadingTasks to 8), added spinner text, implemented state handler that generates embeddings for each task's title+description, queries artifacts for semantic similarity (top 5, threshold 0.3), and links via task_artifacts junction table. Uses RigEmbeddingAdapter for embeddings and SqliteArtifactAdapter for vector search. Transition flow: IngestingArtifacts → LinkingArtifacts → DecomposingTasks. Non-fatal error handling for missing embeddings or search failures.
+//! - 2025-11-29T13:00:00Z @AI: Fix artifact FK constraint failure. Root cause: PRD's project_id wasn't updated to match newly created Project.id, causing artifacts to reference non-existent project. Fix: After creating Project in SavingTasks, update prd.project_id = project.id and refresh self.prd_processing_prd so IngestingArtifacts uses correct project reference.
+//! - 2025-11-29T12:00:00Z @AI: Improve notification panel UX. Added black background via clear_dialog_area(), Up/Down navigation through notifications with selected_notification field, scroll indicator showing position (x/y), and full word-wrapped message display at bottom of panel under "Selected Message" section. Users can now read complete error messages instead of truncated previews. Increased dialog width to 70 chars for better readability.
+//! - 2025-11-29T11:00:00Z @AI: Add IngestingArtifacts and DecomposingTasks to progress indicator. Updated steps array to include all 8 processing states, added step indices for IngestingArtifacts (5) and DecomposingTasks (6), bumped ReloadingTasks to index 7. Added spinner status text for both new states. Users can now see artifact ingestion and task decomposition progress during PRD processing.
+//! - 2025-11-29T10:00:00Z @AI: Add embedding slot to TUI setup wizard. Added ConfigureEmbeddingSlot to SetupWizardStep enum, embedding provider/model fields to App struct, step transitions for embedding slot (Step 5), config.json generation including embedding slot, keyboard handlers for embedding navigation, rendering for embedding slot configuration screen. Updated task tool slots overview to describe four slots (adding embedding for RAG vector search), updated database configuration to Step 6, updated confirmation screen to Step 7 with embedding slot display. Used 🧠 emoji consistently for embedding slot.
+//! - 2025-11-29T08:00:00Z @AI: Implement RAG artifact ingestion in TUI IngestingArtifacts state. Replaced TODO placeholder with full implementation: (1) Get PRD and content from prd_processing_prd/prd_processing_content fields, (2) Get provider from prd_processing_config with fallback to "ollama", (3) Create SqliteArtifactAdapter and RigEmbeddingAdapter via ProviderFactory, (4) Create ArtifactService and call ingest_prd() to chunk, embed, and persist artifacts, (5) Push green BoxContent::Artifact message to prd_gen_conversation with source type, count, and content preview, (6) Track actual artifact count in prd_processing_artifact_count. All errors are non-fatal with warning notifications. Green artifact boxes now display in conversation feed during PRD processing.
+//! - 2025-11-29T07:00:00Z @AI: Add artifact box infrastructure and fix TUI warning display. (1) Replaced 3 eprintln!() calls with proper self.add_notification() for decomposition warnings - collected errors in Vec to avoid borrow checker conflicts, warnings now appear in notification center instead of bypassing TUI rendering. (2) Added BoxContent::Artifact variant with green border for displaying RAG knowledge artifacts in conversation feed with source_type, content_preview, and count fields. (3) Added PRDProcessingState::IngestingArtifacts and DecomposingTasks states to processing flow. (4) Added prd_processing_artifact_count tracking field to App struct. (5) Updated Complete state to track artifact_count and subtask_count for comprehensive completion summary. (6) Artifact ingestion currently skipped with TODO comment - requires embedding service integration for vector computation. (7) Removed unused total_messages variable. Green artifact boxes ready for display once embedding pipeline is implemented.
+//! - 2025-11-28T23:20:00Z @AI: Add artifact search to TUI Spotlight (Phase 6 Task 6.3). Added Artifact variant to SearchResultType enum with source_type and content_preview fields. Added artifacts Vec<Artifact> field to App struct for in-memory artifact storage. Updated search_all() method to search artifact content and source_id with 100-char preview truncation. Modified execute_spotlight_jump() to copy artifact content to clipboard on selection. Enhanced render_spotlight_dialog() to display artifacts with cyan-colored source type badges. Updated placeholder text to include "and artifacts" in search prompt. Artifacts now searchable via '/' Spotlight dialog alongside tasks, PRDs, and projects.
 //! - 2025-11-28T01:35:00Z @AI: Implement intent-based auto-scroll with prd_gen_auto_scroll flag. Added boolean flag (default true) that tracks user's scroll intent. Auto-scroll ONLY when flag is true, allowing blue text blocks to fill and grow while keeping bottom visible. User actions: Up/PageUp/Home disable auto-scroll (preserve manual position), Down/PageDown/End re-enable when reaching absolute bottom, sending message re-enables. This implements expected behavior: (1) let blue LLM text fill up and auto-scroll as it grows, (2) user can scroll up to review history without being pulled back down, (3) auto-scroll resumes only when user returns to bottom. Flag-based approach is cleaner than position comparison.
 //! - 2025-11-28T01:30:00Z @AI: Fix text wrapping with proper height estimation and smart auto-scroll. (1) Calculate wrapped text height based on text length - estimate ~100 chars per line, use ceil() to allocate sufficient space for wrapped content. Previously fixed height of 2 caused wrapped text to be cut off. (2) Implement smart auto-scroll - only auto-scroll when user is already at bottom (scroll_offset >= len - 2). Checks if user scrolled up manually before auto-scrolling, preserving user's scroll position when reviewing history. Both fixes address: blue LLM text now wraps properly, and conversation auto-scrolls down as messages arrive only if user is at bottom.
 //! - 2025-11-28T01:25:00Z @AI: Fix text wrapping by using single Span instead of multiple. Changed text message construction from two separate Spans (icon + text) to single Span with combined text (icon + text as one string). Ratatui's wrap functionality works on text content, not on Lines with multiple Spans - having icon and text as separate Spans created single unwrappable unit. Now full_text combines icon and text into single string, allowing Paragraph.wrap() to properly wrap long messages across multiple lines. Streaming text now wraps correctly.
@@ -174,6 +204,10 @@ enum DashboardTool {
     TaskEditor,
     /// LLM chat/command interface
     LLMChat,
+    /// Artifact browser and viewer
+    ArtifactViewer,
+    /// PRD View - unified task list by PRD
+    PRDView,
     /// Metrics and analytics
     Metrics,
     /// Dev Tools menu (opens submenu)
@@ -186,6 +220,8 @@ impl DashboardTool {
             DashboardTool::Kanban => "📋 Kanban Board",
             DashboardTool::TaskEditor => "✏️  Task Editor",
             DashboardTool::LLMChat => "💬 LLM Chat",
+            DashboardTool::ArtifactViewer => "📚 Artifacts",
+            DashboardTool::PRDView => "📄 PRD View",
             DashboardTool::Metrics => "📊 Metrics",
             DashboardTool::DevTools => "🔧 Dev Tools",
         }
@@ -335,6 +371,10 @@ struct App {
     tasks: std::vec::Vec<task_manager::domain::task::Task>,
     /// PRDs loaded from database
     prds: std::vec::Vec<task_manager::domain::prd::PRD>,
+    /// Artifacts loaded from database (for spotlight search)
+    artifacts: std::vec::Vec<task_manager::domain::artifact::Artifact>,
+    /// Selected artifact index in the artifact viewer
+    selected_artifact: usize,
     /// Selected task index in the list
     selected_task: usize,
     /// Chain-of-thought log entries
@@ -349,6 +389,10 @@ struct App {
     status_message: std::option::Option<String>,
     /// Database adapter for persisting changes
     db_adapter: std::option::Option<task_manager::adapters::sqlite_task_adapter::SqliteTaskAdapter>,
+    /// Artifact adapter for semantic search
+    artifact_adapter: std::option::Option<task_manager::adapters::sqlite_artifact_adapter::SqliteArtifactAdapter>,
+    /// Embedding adapter for semantic search
+    embedding_adapter: std::option::Option<std::sync::Arc<dyn task_orchestrator::ports::embedding_port::EmbeddingPort + Send + Sync>>,
     /// Whether to show the sort menu
     show_sort_menu: bool,
     /// Currently selected sort option
@@ -363,6 +407,8 @@ struct App {
     selected_column: KanbanColumn,
     /// Currently selected task index within the selected column
     selected_task_in_column: usize,
+    /// Currently selected project row in Kanban board (0 = first project)
+    selected_project_row: usize,
     /// Whether to show the recent items dialog
     show_recent_dialog: bool,
     /// Most recently used task IDs (max 10)
@@ -387,6 +433,8 @@ struct App {
     notifications: std::vec::Vec<Notification>,
     /// Whether to show the notification center dialog
     show_notifications: bool,
+    /// Currently selected notification index for navigation
+    selected_notification: usize,
     /// Whether to show the task editor dialog (Phase 4)
     show_task_editor_dialog: bool,
     /// Which field is being edited in the task editor (Phase 4)
@@ -477,6 +525,8 @@ struct App {
     markdown_files: std::vec::Vec<String>,
     /// Currently selected markdown file index
     markdown_selected: usize,
+    /// Whether initial data needs to be loaded (first render)
+    needs_initial_load: bool,
     /// Whether the setup wizard is active (first-time setup)
     setup_wizard_active: bool,
     /// Current step in the setup wizard
@@ -499,6 +549,18 @@ struct App {
     setup_wizard_fallback_provider_selection: usize,
     /// Fallback slot model name
     setup_wizard_fallback_model: String,
+    /// Embedding slot provider for RAG vector embeddings
+    setup_wizard_embedding_provider: LLMProvider,
+    /// Embedding slot provider selection index
+    setup_wizard_embedding_provider_selection: usize,
+    /// Embedding slot model name
+    setup_wizard_embedding_model: String,
+    /// Vision slot provider for image/PDF processing
+    setup_wizard_vision_provider: LLMProvider,
+    /// Vision slot provider selection index
+    setup_wizard_vision_provider_selection: usize,
+    /// Vision slot model name
+    setup_wizard_vision_model: String,
     /// Database path input
     setup_wizard_db_path: String,
     /// Whether PRD processing view is active
@@ -514,6 +576,14 @@ struct App {
     prd_processing_prd: std::option::Option<task_manager::domain::prd::PRD>,
     prd_processing_config: std::option::Option<serde_json::Value>,
     prd_processing_tasks: std::option::Option<std::vec::Vec<task_manager::domain::task::Task>>,
+    /// Artifact count for current PRD processing
+    prd_processing_artifact_count: usize,
+    /// Whether user has requested to cancel PRD processing
+    prd_processing_cancel_requested: bool,
+    /// Processing start time for tracking duration
+    prd_processing_start_time: std::option::Option<chrono::DateTime<chrono::Utc>>,
+    /// Complexity distribution (complexity -> count)
+    prd_processing_complexity_counts: std::collections::HashMap<u8, usize>,
     /// Interactive generation: Conversation history
     prd_gen_conversation: std::vec::Vec<PRDGenMessage>,
     /// Interactive generation: User input buffer
@@ -542,6 +612,26 @@ struct App {
     selected_persona: usize,
     /// Agent tools loaded from database (Phase 4)
     agent_tools: std::vec::Vec<task_manager::domain::agent_tool::AgentTool>,
+    /// Whether to show the artifact generator dialog (Phase 6 TUI Integration)
+    show_artifact_generator_dialog: bool,
+    /// Source path or URL for artifact generation (Phase 6)
+    artifact_gen_source: String,
+    /// Whether artifact generation is currently in progress (Phase 6)
+    artifact_gen_is_generating: bool,
+    /// Progress message for artifact generation (Phase 6)
+    artifact_gen_progress: String,
+    /// Error message from artifact generation (Phase 6)
+    artifact_gen_error: std::option::Option<String>,
+    /// PRD View: Currently selected PRD ID for viewing
+    prd_view_selected_prd_id: std::option::Option<String>,
+    /// PRD View: Tasks for the currently selected PRD
+    prd_view_tasks: std::vec::Vec<task_manager::domain::task::Task>,
+    /// PRD View: Currently selected task index within the view
+    prd_view_selected_task: usize,
+    /// PRD View: Scroll offset for vertical scrolling
+    prd_view_scroll_offset: usize,
+    /// PRD View: Currently selected PRD metadata
+    prd_view_current_prd: std::option::Option<task_manager::domain::prd::PRD>,
 }
 
 /// Status of interactive PRD generation.
@@ -585,6 +675,12 @@ enum BoxContent {
     Validation {
         task_title: String,
         message: String,
+    },
+    /// Artifact box (green) - knowledge chunks from RAG ingestion
+    Artifact {
+        source_type: String,
+        content_preview: String,
+        count: usize, // Number of artifacts in this batch
     },
 }
 
@@ -686,9 +782,10 @@ enum ConfigEditorField {
 /// Type of search result in Spotlight Search (Phase 9).
 #[derive(Debug, Clone)]
 enum SearchResultType {
-    Task { id: String, title: String, description: String },
-    PRD { id: String, title: String },
-    Project { id: String, name: String },
+    Task { id: String, title: String, description: String, score: Option<f32> },
+    PRD { id: String, title: String, score: Option<f32> },
+    Project { id: String, name: String, score: Option<f32> },
+    Artifact { id: String, source_type: String, content_preview: String, project_id: String, score: Option<f32> },
 }
 
 /// Action that requires user confirmation (Phase 10).
@@ -703,7 +800,7 @@ enum ConfirmationAction {
 enum SetupWizardStep {
     /// Welcome screen with introduction
     Welcome,
-    /// Task tool slot overview (explains main/research/fallback)
+    /// Task tool slot overview (explains main/research/fallback/embedding)
     TaskToolSlots,
     /// Configure main task tool slot (provider + model)
     ConfigureMainSlot,
@@ -711,6 +808,10 @@ enum SetupWizardStep {
     ConfigureResearchSlot,
     /// Configure fallback task tool slot (provider + model)
     ConfigureFallbackSlot,
+    /// Configure embedding slot for RAG vector embeddings (provider + model)
+    ConfigureEmbeddingSlot,
+    /// Configure vision slot for image/PDF processing (provider + model)
+    ConfigureVisionSlot,
     /// Database path configuration
     DatabaseConfiguration,
     /// Final confirmation and summary
@@ -730,16 +831,28 @@ enum PRDProcessingState {
     ParsingPRD,
     /// Loading configuration
     LoadingConfig,
+    /// Processing media (images/PDFs) found in PRD with vision LLM
+    ProcessingMedia,
     /// Generating tasks via LLM (this is the slow step)
     GeneratingTasks,
     /// Saving tasks to database
     SavingTasks,
+    /// Assigning personas to tasks via LLM
+    AssigningPersonas,
+    /// Ingesting knowledge artifacts for RAG
+    IngestingArtifacts,
+    /// Linking artifacts to tasks via semantic similarity
+    LinkingArtifacts,
+    /// Decomposing tasks into subtasks
+    DecomposingTasks,
     /// Reloading task list
     ReloadingTasks,
     /// Processing complete successfully
-    Complete { task_count: usize },
+    Complete { task_count: usize, artifact_count: usize, subtask_count: usize },
     /// Processing failed with error
     Failed { error: String },
+    /// Processing cancelled by user
+    Cancelled,
 }
 
 /// LLM provider options for setup wizard.
@@ -808,6 +921,8 @@ impl App {
             show_details_panel: false,
             tasks: std::vec::Vec::new(),
             prds: std::vec::Vec::new(),
+            artifacts: std::vec::Vec::new(),
+            selected_artifact: 0,
             selected_task: 0,
             thinking_log: std::vec![
                 String::from("🧠 Analyzing task complexity..."),
@@ -831,6 +946,8 @@ impl App {
             show_shortcuts: false,
             status_message: std::option::Option::None,
             db_adapter: std::option::Option::None,
+            artifact_adapter: std::option::Option::None,
+            embedding_adapter: std::option::Option::None,
             show_sort_menu: false,
             current_sort: TaskSortOption::CreatedNewest,
             sort_menu_selection: 0,
@@ -838,6 +955,7 @@ impl App {
             jump_input: String::new(),
             selected_column: KanbanColumn::Todo,
             selected_task_in_column: 0,
+            selected_project_row: 0,
             show_recent_dialog: false,
             recent_task_ids: std::vec::Vec::new(),
             recent_selection: 0,
@@ -850,6 +968,7 @@ impl App {
             loading_frame: 0,
             notifications: std::vec::Vec::new(),
             show_notifications: false,
+            selected_notification: 0,
             show_task_editor_dialog: false,
             task_editor_field: TaskEditorField::Title,
             task_editor_input: String::new(),
@@ -895,6 +1014,7 @@ impl App {
             show_markdown_browser: false,
             markdown_files: std::vec::Vec::new(),
             markdown_selected: 0,
+            needs_initial_load: true,
             setup_wizard_active: false,
             setup_wizard_step: SetupWizardStep::Welcome,
             setup_wizard_main_provider: LLMProvider::Ollama,
@@ -906,6 +1026,12 @@ impl App {
             setup_wizard_fallback_provider: LLMProvider::Ollama,
             setup_wizard_fallback_provider_selection: 0,
             setup_wizard_fallback_model: String::from(LLMProvider::Ollama.default_model()),
+            setup_wizard_embedding_provider: LLMProvider::Ollama,
+            setup_wizard_embedding_provider_selection: 0,
+            setup_wizard_embedding_model: String::from("nomic-embed-text"),
+            setup_wizard_vision_provider: LLMProvider::Ollama,
+            setup_wizard_vision_provider_selection: 0,
+            setup_wizard_vision_model: String::from("llava:latest"),
             setup_wizard_db_path: String::from("sqlite:.rigger/tasks.db"),
             show_prd_processing: false,
             prd_processing_state: PRDProcessingState::Idle,
@@ -915,6 +1041,10 @@ impl App {
             prd_processing_prd: std::option::Option::None,
             prd_processing_config: std::option::Option::None,
             prd_processing_tasks: std::option::Option::None,
+            prd_processing_artifact_count: 0,
+            prd_processing_cancel_requested: false,
+            prd_processing_start_time: std::option::Option::None,
+            prd_processing_complexity_counts: std::collections::HashMap::new(),
             prd_gen_conversation: std::vec::Vec::new(),
             prd_gen_input: String::new(),
             prd_gen_partial_tasks: std::vec::Vec::new(),
@@ -929,6 +1059,16 @@ impl App {
             personas: std::vec::Vec::new(),
             selected_persona: 0,
             agent_tools: std::vec::Vec::new(),
+            show_artifact_generator_dialog: false,
+            artifact_gen_source: String::new(),
+            artifact_gen_is_generating: false,
+            artifact_gen_progress: String::new(),
+            artifact_gen_error: std::option::Option::None,
+            prd_view_selected_prd_id: std::option::Option::None,
+            prd_view_tasks: std::vec::Vec::new(),
+            prd_view_selected_task: 0,
+            prd_view_scroll_offset: 0,
+            prd_view_current_prd: std::option::Option::None,
         }
     }
 
@@ -981,6 +1121,45 @@ impl App {
         // Store adapter for future updates
         self.db_adapter = std::option::Option::Some(adapter);
 
+        // Initialize artifact adapter for semantic search
+        match task_manager::adapters::sqlite_artifact_adapter::SqliteArtifactAdapter::connect_and_init(
+            &std::format!("sqlite:{}", db_path.display())
+        ).await {
+            std::result::Result::Ok(artifact_adapter) => {
+                self.artifact_adapter = std::option::Option::Some(artifact_adapter);
+            }
+            std::result::Result::Err(e) => {
+                // Non-fatal: semantic search will fall back to substring matching
+                eprintln!("Warning: Could not initialize artifact adapter for semantic search: {}", e);
+            }
+        }
+
+        // Initialize embedding adapter for semantic search
+        let config_path = current_dir.join(".rigger").join("config.json");
+        if config_path.exists() {
+            if let std::result::Result::Ok(config_content) = std::fs::read_to_string(&config_path) {
+                if let std::result::Result::Ok(config) = serde_json::from_str::<serde_json::Value>(&config_content) {
+                    let provider = config["task_tools"]["embedding"]["provider"].as_str().unwrap_or("ollama");
+                    let model = config["task_tools"]["embedding"]["model"].as_str().unwrap_or("nomic-embed-text");
+
+                    let embedding_adapter: std::sync::Arc<dyn task_orchestrator::ports::embedding_port::EmbeddingPort + Send + Sync> =
+                        if provider == "openai" {
+                            let api_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
+                            std::sync::Arc::new(task_orchestrator::adapters::rig_embedding_adapter::RigEmbeddingAdapter::new_openai(
+                                api_key,
+                                String::from(model),
+                            ))
+                        } else {
+                            std::sync::Arc::new(task_orchestrator::adapters::rig_embedding_adapter::RigEmbeddingAdapter::new_ollama(
+                                String::from(model),
+                            ))
+                        };
+
+                    self.embedding_adapter = std::option::Option::Some(embedding_adapter);
+                }
+            }
+        }
+
         // Mark as synced with database
         self.last_saved_at = std::option::Option::Some(chrono::Utc::now());
         self.has_unsaved_changes = false;
@@ -1021,7 +1200,16 @@ impl App {
         // Connect to database
         let adapter = task_manager::adapters::sqlite_project_adapter::SqliteProjectAdapter::connect_and_init(
             &std::format!("sqlite:{}", db_path.display())
-        ).await.map_err(|e| anyhow::anyhow!(e))?;
+        ).await.map_err(|e| {
+            if e.contains("no such column") || e.contains("no such table") {
+                anyhow::anyhow!(
+                    "{}. Database schema may be outdated. Try deleting .rigger/tasks.db and running 'rig init'.",
+                    e
+                )
+            } else {
+                anyhow::anyhow!(e)
+            }
+        })?;
 
         // Load all projects
         let filter = task_manager::ports::project_repository_port::ProjectFilter::All;
@@ -1034,7 +1222,23 @@ impl App {
             offset: std::option::Option::None,
         };
 
-        self.projects = adapter.find_async(&filter, opts).await.map_err(|e| anyhow::anyhow!("{:?}", e))?;
+        self.projects = adapter.find_async(&filter, opts).await.map_err(|e| {
+            // Provide more helpful error message for common database issues
+            let err_str = std::format!("{:?}", e);
+            if err_str.contains("no such column") {
+                anyhow::anyhow!(
+                    "Database schema mismatch: {}. Try deleting .rigger/tasks.db and running 'rig init' again.",
+                    err_str
+                )
+            } else if err_str.contains("no such table") {
+                anyhow::anyhow!(
+                    "Database table missing: {}. The database may be corrupted. Try 'rig init' to reinitialize.",
+                    err_str
+                )
+            } else {
+                anyhow::anyhow!("{}", err_str)
+            }
+        })?;
 
         // Select first project by default if projects exist
         if !self.projects.is_empty() && self.selected_project_id.is_none() {
@@ -1049,6 +1253,76 @@ impl App {
         self.add_notification(
             NotificationLevel::Success,
             std::format!("Loaded {} projects from database", self.projects.len())
+        );
+
+        std::result::Result::Ok(())
+    }
+
+    /// Loads PRDs from the database (Phase 4: PRD-Project-Task linkage).
+    ///
+    /// PRDs link tasks to projects via the source_prd_id field on tasks.
+    async fn load_prds(&mut self) -> anyhow::Result<()> {
+        // Get database path from .rigger directory
+        let current_dir = std::env::current_dir()?;
+        let db_path = current_dir.join(".rigger").join("tasks.db");
+
+        if !db_path.exists() {
+            self.prds = std::vec::Vec::new();
+            return std::result::Result::Ok(());
+        }
+
+        // Connect to database using task adapter (which creates prds table)
+        let adapter = task_manager::adapters::sqlite_task_adapter::SqliteTaskAdapter::connect_and_init(
+            &std::format!("sqlite:{}", db_path.display())
+        ).await.map_err(|e| anyhow::anyhow!(e))?;
+
+        // Load all PRDs using raw SQL
+        let rows = sqlx::query(
+            "SELECT id, project_id, title, objectives_json, tech_stack_json, constraints_json, raw_content, created_at FROM prds ORDER BY created_at DESC"
+        )
+        .fetch_all(adapter.pool())
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to load PRDs: {:?}", e))?;
+
+        // Convert rows to PRD domain objects
+        self.prds = rows.iter().map(|row| {
+            let id: String = sqlx::Row::get(row, 0);
+            let project_id: String = sqlx::Row::get(row, 1);
+            let title: String = sqlx::Row::get(row, 2);
+            let objectives_json: std::option::Option<String> = sqlx::Row::get(row, 3);
+            let tech_stack_json: std::option::Option<String> = sqlx::Row::get(row, 4);
+            let constraints_json: std::option::Option<String> = sqlx::Row::get(row, 5);
+            let raw_content: String = sqlx::Row::get(row, 6);
+            let created_at_str: String = sqlx::Row::get(row, 7);
+
+            let objectives: std::vec::Vec<String> = objectives_json
+                .and_then(|j| serde_json::from_str(&j).ok())
+                .unwrap_or_default();
+            let tech_stack: std::vec::Vec<String> = tech_stack_json
+                .and_then(|j| serde_json::from_str(&j).ok())
+                .unwrap_or_default();
+            let constraints: std::vec::Vec<String> = constraints_json
+                .and_then(|j| serde_json::from_str(&j).ok())
+                .unwrap_or_default();
+            let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_str)
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .unwrap_or_else(|_| chrono::Utc::now());
+
+            task_manager::domain::prd::PRD {
+                id,
+                project_id,
+                title,
+                objectives,
+                tech_stack,
+                constraints,
+                raw_content,
+                created_at,
+            }
+        }).collect();
+
+        self.add_notification(
+            NotificationLevel::Info,
+            std::format!("Loaded {} PRDs from database", self.prds.len())
         );
 
         std::result::Result::Ok(())
@@ -1102,6 +1376,199 @@ impl App {
         self.add_notification(
             NotificationLevel::Success,
             std::format!("Loaded {} personas from database", self.personas.len())
+        );
+
+        std::result::Result::Ok(())
+    }
+
+    /// Loads artifacts from the database (for artifact viewer).
+    async fn load_artifacts(&mut self) -> anyhow::Result<()> {
+        // Get database path from .rigger directory
+        let current_dir = std::env::current_dir()?;
+        let db_path = current_dir.join(".rigger").join("tasks.db");
+
+        if !db_path.exists() {
+            self.artifacts = std::vec::Vec::new();
+            return std::result::Result::Ok(());
+        }
+
+        // Connect to database using task adapter (which creates artifacts table)
+        let adapter = task_manager::adapters::sqlite_task_adapter::SqliteTaskAdapter::connect_and_init(
+            &std::format!("sqlite:{}", db_path.display())
+        ).await.map_err(|e| anyhow::anyhow!(e))?;
+
+        // Load all artifacts using raw SQL (no embedding needed for display)
+        let rows = sqlx::query(
+            "SELECT id, project_id, source_id, source_type, content, metadata, created_at FROM artifacts ORDER BY created_at DESC"
+        )
+        .fetch_all(adapter.pool())
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to load artifacts: {:?}", e))?;
+
+        // Convert rows to Artifact domain objects (without embeddings for display)
+        self.artifacts = rows.iter().map(|row| {
+            let id: String = sqlx::Row::get(row, 0);
+            let project_id: String = sqlx::Row::get(row, 1);
+            let source_id: String = sqlx::Row::get(row, 2);
+            let source_type_str: String = sqlx::Row::get(row, 3);
+            let content: String = sqlx::Row::get(row, 4);
+            let metadata: std::option::Option<String> = sqlx::Row::get(row, 5);
+            let created_at_str: String = sqlx::Row::get(row, 6);
+
+            let source_type = match source_type_str.as_str() {
+                "PRD" => task_manager::domain::artifact::ArtifactType::PRD,
+                "File" => task_manager::domain::artifact::ArtifactType::File,
+                "WebResearch" => task_manager::domain::artifact::ArtifactType::WebResearch,
+                "UserInput" => task_manager::domain::artifact::ArtifactType::UserInput,
+                "Image" => task_manager::domain::artifact::ArtifactType::Image,
+                "PDF" => task_manager::domain::artifact::ArtifactType::PDF,
+                _ => task_manager::domain::artifact::ArtifactType::UserInput, // Default fallback
+            };
+
+            let created_at = chrono::DateTime::parse_from_rfc3339(&created_at_str)
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+                .unwrap_or_else(|_| chrono::Utc::now());
+
+            task_manager::domain::artifact::Artifact {
+                id,
+                project_id,
+                source_id,
+                source_type,
+                content,
+                embedding: std::vec::Vec::new(), // Don't load embeddings for display
+                metadata,
+                created_at,
+                binary_content: std::option::Option::None, // Could load if needed
+                mime_type: std::option::Option::None,
+                source_url: std::option::Option::None,
+                page_number: std::option::Option::None,
+            }
+        }).collect();
+
+        self.add_notification(
+            NotificationLevel::Info,
+            std::format!("Loaded {} artifacts from database", self.artifacts.len())
+        );
+
+        std::result::Result::Ok(())
+    }
+
+    /// Loads PRD view data - fetches tasks for the selected PRD ID and loads PRD metadata.
+    /// If no PRD is selected, defaults to the most recent PRD for the current project.
+    async fn load_prd_view_data(&mut self) -> anyhow::Result<()> {
+        // Get PRDs filtered by current project
+        let filtered_prds: std::vec::Vec<&task_manager::domain::prd::PRD> = if let std::option::Option::Some(ref project_id) = self.selected_project_id {
+            // Specific project selected - show only its PRDs
+            self.prds.iter().filter(|prd| &prd.project_id == project_id).collect()
+        } else {
+            // "All Projects" selected - show all PRDs
+            self.prds.iter().collect()
+        };
+
+        // If no PRD is selected, select the most recent one from filtered list
+        if self.prd_view_selected_prd_id.is_none() && !filtered_prds.is_empty() {
+            self.prd_view_selected_prd_id = std::option::Option::Some(filtered_prds[0].id.clone());
+        }
+
+        // Verify the currently selected PRD is still in the filtered list (project may have changed)
+        if let std::option::Option::Some(ref prd_id) = self.prd_view_selected_prd_id {
+            let prd_still_valid = filtered_prds.iter().any(|prd| &prd.id == prd_id);
+            if !prd_still_valid && !filtered_prds.is_empty() {
+                // Current PRD not in filtered list - switch to first PRD of new project
+                self.prd_view_selected_prd_id = std::option::Option::Some(filtered_prds[0].id.clone());
+            }
+        }
+
+        // If still no PRD selected, clear view and return
+        let prd_id = match &self.prd_view_selected_prd_id {
+            std::option::Option::Some(id) => id.clone(),
+            std::option::Option::None => {
+                self.prd_view_tasks = std::vec::Vec::new();
+                self.prd_view_current_prd = std::option::Option::None;
+                return std::result::Result::Ok(());
+            }
+        };
+
+        // Load PRD metadata
+        self.prd_view_current_prd = self.prds.iter()
+            .find(|p| p.id == prd_id)
+            .cloned();
+
+        // Get database adapter
+        let adapter = match &self.db_adapter {
+            std::option::Option::Some(a) => a,
+            std::option::Option::None => {
+                self.prd_view_tasks = std::vec::Vec::new();
+                return std::result::Result::Ok(());
+            }
+        };
+
+        // Use tasks from main list instead of reloading from database
+        // This ensures we have the latest in-memory data with agent_persona, context_files, etc.
+        self.prd_view_tasks = self.tasks.iter()
+            .filter(|t| t.source_prd_id.as_ref().map_or(false, |id| id == &prd_id))
+            .cloned()
+            .collect();
+
+        // Sort by sort_order (ascending), then by created_at for tasks without sort_order
+        self.prd_view_tasks.sort_by(|a, b| {
+            match (a.sort_order, b.sort_order) {
+                (std::option::Option::Some(order_a), std::option::Option::Some(order_b)) => order_a.cmp(&order_b),
+                (std::option::Option::Some(_), std::option::Option::None) => std::cmp::Ordering::Less,
+                (std::option::Option::None, std::option::Option::Some(_)) => std::cmp::Ordering::Greater,
+                (std::option::Option::None, std::option::Option::None) => a.created_at.cmp(&b.created_at),
+            }
+        });
+
+        // Initialize sort_order for tasks that don't have it
+        let mut needs_save = false;
+        for (idx, task) in self.prd_view_tasks.iter_mut().enumerate() {
+            if task.sort_order.is_none() {
+                task.sort_order = std::option::Option::Some((idx * 1000) as i32);
+                task.updated_at = chrono::Utc::now();
+                needs_save = true;
+            }
+        }
+
+        // Save tasks with newly initialized sort_order and update main tasks list
+        if needs_save {
+            use hexser::ports::Repository;
+            let mut save_errors = std::vec::Vec::new();
+
+            for task in &self.prd_view_tasks {
+                // Save to database
+                if let std::result::Result::Err(e) = adapter.save_async(task.clone()).await {
+                    save_errors.push(std::format!("Failed to save task sort_order: {}", e));
+                }
+
+                // Update main tasks list to keep in sync
+                if let std::option::Option::Some(main_task) = self.tasks.iter_mut().find(|t| t.id == task.id) {
+                    main_task.sort_order = task.sort_order;
+                    main_task.updated_at = task.updated_at;
+                }
+            }
+
+            // Report any save errors
+            for error in save_errors {
+                self.add_notification(NotificationLevel::Warning, error);
+            }
+        }
+
+        // Reset scroll and selection
+        self.prd_view_selected_task = 0;
+        self.prd_view_scroll_offset = 0;
+
+        let total_tasks = self.tasks.len();
+        let tasks_with_prd_id = self.tasks.iter().filter(|t| t.source_prd_id.is_some()).count();
+
+        self.add_notification(
+            NotificationLevel::Info,
+            std::format!("PRD View: {} of {} tasks match PRD '{}' ({} tasks have source_prd_id set)",
+                self.prd_view_tasks.len(),
+                total_tasks,
+                prd_id,
+                tasks_with_prd_id
+            )
         );
 
         std::result::Result::Ok(())
@@ -1583,6 +2050,239 @@ impl App {
         self.markdown_selected = 0;
     }
 
+    /// Opens the artifact generator dialog (Phase 6 TUI Integration).
+    ///
+    /// Revision History
+    /// - 2025-11-30T19:30:00Z @AI: Initial implementation for Phase 6 TUI artifact generation.
+    fn open_artifact_generator(&mut self) {
+        self.show_artifact_generator_dialog = true;
+        self.artifact_gen_source.clear();
+        self.artifact_gen_is_generating = false;
+        self.artifact_gen_progress.clear();
+        self.artifact_gen_error = std::option::Option::None;
+    }
+
+    /// Closes the artifact generator dialog (Phase 6 TUI Integration).
+    fn close_artifact_generator(&mut self) {
+        self.show_artifact_generator_dialog = false;
+        self.artifact_gen_source.clear();
+        self.artifact_gen_is_generating = false;
+        self.artifact_gen_progress.clear();
+        self.artifact_gen_error = std::option::Option::None;
+    }
+
+    /// Starts artifact generation from the source path/URL (Phase 6 TUI Integration).
+    ///
+    /// This method:
+    /// 1. Detects whether the source is a directory or URL
+    /// 2. Creates appropriate adapters (IgnoreAwareScanner or ReqwestWebCrawler)
+    /// 3. Runs the ArtifactGeneratorService
+    /// 4. Shows progress and completion notifications
+    ///
+    /// Revision History
+    /// - 2025-11-30T19:30:00Z @AI: Initial implementation for Phase 6 TUI artifact generation.
+    async fn start_artifact_generation(&mut self) -> anyhow::Result<()> {
+        let source = self.artifact_gen_source.clone();
+
+        // Validate source is not empty
+        if source.is_empty() {
+            self.artifact_gen_error = std::option::Option::Some(String::from("Source path or URL is required"));
+            return std::result::Result::Ok(());
+        }
+
+        // Set generating state
+        self.artifact_gen_is_generating = true;
+        self.artifact_gen_progress = String::from("Initializing...");
+        self.artifact_gen_error = std::option::Option::None;
+
+        // Determine if source is a URL or directory
+        let is_url = source.starts_with("http://") || source.starts_with("https://");
+
+        // Get database and config paths
+        let current_dir = std::env::current_dir()?;
+        let db_path = current_dir.join(".rigger").join("tasks.db");
+        let config_path = current_dir.join(".rigger").join("config.json");
+
+        if !db_path.exists() {
+            self.artifact_gen_is_generating = false;
+            self.artifact_gen_error = std::option::Option::Some(String::from("Database not found. Run 'rig init' first."));
+            return std::result::Result::Ok(());
+        }
+
+        // Read config for embedding provider
+        let config: serde_json::Value = if config_path.exists() {
+            let config_str = std::fs::read_to_string(&config_path)?;
+            serde_json::from_str(&config_str)?
+        } else {
+            serde_json::json!({})
+        };
+
+        // Get embedding provider from config
+        let embedding_provider = config
+            .get("task_tools")
+            .and_then(|t| t.get("embedding"))
+            .and_then(|e| e.get("provider"))
+            .and_then(|p| p.as_str())
+            .unwrap_or("ollama");
+
+        let embedding_model = config
+            .get("task_tools")
+            .and_then(|t| t.get("embedding"))
+            .and_then(|e| e.get("model"))
+            .and_then(|m| m.as_str())
+            .unwrap_or("nomic-embed-text");
+
+        self.artifact_gen_progress = String::from("Creating adapters...");
+
+        // Create embedding adapter using provider factory
+        let provider_factory = match task_orchestrator::adapters::provider_factory::ProviderFactory::new(
+            embedding_provider,
+            embedding_model,
+        ) {
+            std::result::Result::Ok(factory) => factory,
+            std::result::Result::Err(e) => {
+                self.artifact_gen_is_generating = false;
+                self.artifact_gen_error = std::option::Option::Some(std::format!("Failed to create provider factory: {}", e));
+                return std::result::Result::Ok(());
+            }
+        };
+
+        let embedding_adapter: std::sync::Arc<dyn task_orchestrator::ports::embedding_port::EmbeddingPort + std::marker::Send + std::marker::Sync> =
+            match provider_factory.create_embedding_adapter() {
+                std::result::Result::Ok(adapter) => adapter,
+                std::result::Result::Err(e) => {
+                    self.artifact_gen_is_generating = false;
+                    self.artifact_gen_error = std::option::Option::Some(std::format!("Failed to create embedding adapter: {}", e));
+                    return std::result::Result::Ok(());
+                }
+            };
+
+        // Create artifact adapter
+        let db_url = std::format!("sqlite:{}", db_path.display());
+        let artifact_adapter = match task_manager::adapters::sqlite_artifact_adapter::SqliteArtifactAdapter::connect_and_init(&db_url).await {
+            std::result::Result::Ok(adapter) => std::sync::Arc::new(std::sync::Mutex::new(adapter)),
+            std::result::Result::Err(e) => {
+                self.artifact_gen_is_generating = false;
+                self.artifact_gen_error = std::option::Option::Some(std::format!("Failed to create artifact adapter: {}", e));
+                return std::result::Result::Ok(());
+            }
+        };
+
+        // Auto-generate project ID from source
+        let project_id = if is_url {
+            // Extract domain from URL
+            source
+                .replace("http://", "")
+                .replace("https://", "")
+                .split('/')
+                .next()
+                .unwrap_or("unknown")
+                .to_string()
+        } else {
+            // Use directory name
+            std::path::Path::new(&source)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("project")
+                .to_string()
+        };
+
+        // Create generation config
+        let gen_config = task_orchestrator::services::artifact_generator_service::GenerationConfig::new(project_id.clone());
+
+        if is_url {
+            // Web crawling mode
+            self.artifact_gen_progress = std::format!("Crawling {}...", source);
+
+            // Create web crawler
+            let crawler = std::sync::Arc::new(
+                task_orchestrator::adapters::reqwest_web_crawler::ReqwestWebCrawler::new()
+            );
+
+            // Create dummy scanner (not used for web crawling)
+            let scanner = std::sync::Arc::new(DummyDirectoryScanner);
+
+            // Create and run generator service
+            let service = task_orchestrator::services::artifact_generator_service::ArtifactGeneratorService::new(
+                scanner,
+                crawler,
+                embedding_adapter,
+                artifact_adapter,
+            );
+
+            // Create crawl config
+            let crawl_config = task_orchestrator::domain::crawl_result::CrawlConfig::new(source.clone());
+
+            match service.generate_from_url(&source, &gen_config, &crawl_config).await {
+                std::result::Result::Ok(report) => {
+                    self.artifact_gen_is_generating = false;
+                    self.artifact_gen_progress.clear();
+                    self.add_notification(
+                        NotificationLevel::Success,
+                        std::format!(
+                            "Generated {} artifacts from {} pages ({:.1}KB) in {}ms",
+                            report.artifacts_created,
+                            report.pages_crawled,
+                            report.bytes_processed as f64 / 1024.0,
+                            report.duration_ms
+                        )
+                    );
+                    self.close_artifact_generator();
+                }
+                std::result::Result::Err(e) => {
+                    self.artifact_gen_is_generating = false;
+                    self.artifact_gen_error = std::option::Option::Some(std::format!("Crawl failed: {}", e));
+                }
+            }
+        } else {
+            // Directory scanning mode
+            self.artifact_gen_progress = std::format!("Scanning {}...", source);
+
+            // Create directory scanner
+            let scanner = std::sync::Arc::new(
+                task_manager::adapters::ignore_aware_scanner::IgnoreAwareScanner::new()
+            );
+
+            // Create dummy crawler (not used for directory scanning)
+            let crawler = std::sync::Arc::new(DummyWebCrawler);
+
+            // Create and run generator service
+            let service = task_orchestrator::services::artifact_generator_service::ArtifactGeneratorService::new(
+                scanner,
+                crawler,
+                embedding_adapter,
+                artifact_adapter,
+            );
+
+            // Create scan config
+            let scan_config = task_manager::domain::scan_config::ScanConfig::new(source.clone());
+
+            match service.generate_from_directory(&source, &gen_config, &scan_config).await {
+                std::result::Result::Ok(report) => {
+                    self.artifact_gen_is_generating = false;
+                    self.artifact_gen_progress.clear();
+                    self.add_notification(
+                        NotificationLevel::Success,
+                        std::format!(
+                            "Generated {} artifacts from {} files ({:.1}KB) in {}ms",
+                            report.artifacts_created,
+                            report.files_scanned,
+                            report.bytes_processed as f64 / 1024.0,
+                            report.duration_ms
+                        )
+                    );
+                    self.close_artifact_generator();
+                }
+                std::result::Result::Err(e) => {
+                    self.artifact_gen_is_generating = false;
+                    self.artifact_gen_error = std::option::Option::Some(std::format!("Scan failed: {}", e));
+                }
+            }
+        }
+
+        std::result::Result::Ok(())
+    }
+
     /// Provides intelligent troubleshooting for Ollama errors.
     ///
     /// Performs actual system checks to diagnose the specific issue:
@@ -1734,9 +2434,22 @@ impl App {
     /// Processes ONE step of PRD creation, allowing UI to render between steps.
     /// Returns true if processing should continue, false if complete or failed.
     async fn process_prd_step(&mut self) -> bool {
+        // Check if cancellation was requested
+        if self.prd_processing_cancel_requested {
+            self.prd_processing_state = PRDProcessingState::Cancelled;
+            self.prd_processing_cancel_requested = false; // Reset flag
+            return false;
+        }
+
         match &self.prd_processing_state {
             PRDProcessingState::Idle => false,
+            PRDProcessingState::Cancelled => false,
             PRDProcessingState::ReadingFile => {
+                // Capture start time for duration tracking
+                if self.prd_processing_start_time.is_none() {
+                    self.prd_processing_start_time = std::option::Option::Some(chrono::Utc::now());
+                }
+
                 // Read file
                 let current_dir = match std::env::current_dir() {
                     Ok(dir) => dir,
@@ -1805,7 +2518,7 @@ impl App {
                         match serde_json::from_str(&config_content) {
                             Ok(config) => {
                                 self.prd_processing_config = Some(config);
-                                self.prd_processing_state = PRDProcessingState::GeneratingTasks;
+                                self.prd_processing_state = PRDProcessingState::ProcessingMedia;
                                 true
                             }
                             Err(e) => {
@@ -1821,6 +2534,125 @@ impl App {
                             error: std::format!("Failed to read config: {}", e),
                         };
                         false
+                    }
+                }
+            }
+            PRDProcessingState::ProcessingMedia => {
+                // Process media (images/PDFs) found in PRD content using vision LLM
+                let prd_content = match &self.prd_processing_content {
+                    Some(c) => c.clone(),
+                    None => {
+                        // No content, skip media processing
+                        self.prd_processing_state = PRDProcessingState::GeneratingTasks;
+                        return true;
+                    }
+                };
+
+                let config = match &self.prd_processing_config {
+                    Some(c) => c.clone(),
+                    None => {
+                        // No config, skip media processing
+                        self.prd_processing_state = PRDProcessingState::GeneratingTasks;
+                        return true;
+                    }
+                };
+
+                // Get project_id and prd_id from the parsed PRD
+                let (project_id, prd_id) = match &self.prd_processing_prd {
+                    Some(prd) => (prd.project_id.clone(), prd.id.clone()),
+                    None => {
+                        // No PRD parsed yet, skip media processing
+                        self.prd_processing_state = PRDProcessingState::GeneratingTasks;
+                        return true;
+                    }
+                };
+
+                // Check if vision slot is configured
+                let vision_provider = config["task_tools"]["vision"]["provider"].as_str();
+                let vision_model = config["task_tools"]["vision"]["model"].as_str();
+
+                if vision_provider.is_none() || vision_model.is_none() {
+                    // Vision slot not configured, skip media processing
+                    self.prd_processing_state = PRDProcessingState::GeneratingTasks;
+                    return true;
+                }
+
+                let vision_provider = vision_provider.unwrap();
+                let vision_model = vision_model.unwrap();
+
+                // Create vision adapter directly based on provider
+                let vision_adapter: std::sync::Arc<dyn task_orchestrator::ports::vision_port::VisionPort + std::marker::Send + std::marker::Sync> = match vision_provider {
+                    "ollama" => {
+                        std::sync::Arc::new(
+                            task_orchestrator::adapters::rig_vision_adapter::RigVisionAdapter::new_ollama(
+                                vision_model.to_string()
+                            )
+                        )
+                    }
+                    "openai" | "rig" => {
+                        // Get API key from environment
+                        match std::env::var("OPENAI_API_KEY") {
+                            std::result::Result::Ok(api_key) => {
+                                std::sync::Arc::new(
+                                    task_orchestrator::adapters::rig_vision_adapter::RigVisionAdapter::new_openai(
+                                        api_key,
+                                        vision_model.to_string()
+                                    )
+                                )
+                            }
+                            std::result::Result::Err(_) => {
+                                eprintln!("Warning: OPENAI_API_KEY not set. Skipping media processing.");
+                                self.prd_processing_state = PRDProcessingState::GeneratingTasks;
+                                return true;
+                            }
+                        }
+                    }
+                    "anthropic" => {
+                        // Get API key from environment
+                        match std::env::var("ANTHROPIC_API_KEY") {
+                            std::result::Result::Ok(api_key) => {
+                                std::sync::Arc::new(
+                                    task_orchestrator::adapters::rig_vision_adapter::RigVisionAdapter::new_anthropic(
+                                        api_key,
+                                        vision_model.to_string()
+                                    )
+                                )
+                            }
+                            std::result::Result::Err(_) => {
+                                eprintln!("Warning: ANTHROPIC_API_KEY not set. Skipping media processing.");
+                                self.prd_processing_state = PRDProcessingState::GeneratingTasks;
+                                return true;
+                            }
+                        }
+                    }
+                    _ => {
+                        eprintln!("Warning: Unsupported vision provider '{}'. Skipping media processing.", vision_provider);
+                        self.prd_processing_state = PRDProcessingState::GeneratingTasks;
+                        return true;
+                    }
+                };
+
+                // Create VisionService and process PRD media
+                let vision_service = task_orchestrator::services::vision_service::VisionService::new(vision_adapter);
+
+                match vision_service.process_prd_media(&prd_content, &project_id, &prd_id, None).await {
+                    std::result::Result::Ok(processed_result) => {
+                        // Update PRD content with injected media descriptions
+                        self.prd_processing_content = Some(processed_result.enhanced_content.clone());
+
+                        // Also update the parsed PRD's raw_content if available
+                        if let Some(ref mut prd) = self.prd_processing_prd {
+                            prd.raw_content = processed_result.enhanced_content;
+                        }
+
+                        self.prd_processing_state = PRDProcessingState::GeneratingTasks;
+                        true
+                    }
+                    std::result::Result::Err(e) => {
+                        // Media processing failed, log warning but continue
+                        eprintln!("Warning: Media processing failed: {}. Continuing without media descriptions.", e);
+                        self.prd_processing_state = PRDProcessingState::GeneratingTasks;
+                        true
                     }
                 }
             }
@@ -1884,19 +2716,31 @@ impl App {
                                     let mut personas = std::vec::Vec::new();
                                     for row in rows {
                                         use sqlx::Row;
+                                        // Explicitly handle nullable fields with Option<String> type annotations
+                                        let id: String = row.get(0);
+                                        let project_id: std::option::Option<String> = row.get(1);
+                                        let name: String = row.get(2);
+                                        let role: String = row.get(3);
+                                        let description: String = row.get(4);
+                                        let llm_provider: std::option::Option<String> = row.get(5);
+                                        let llm_model: std::option::Option<String> = row.get(6);
+                                        let is_default: bool = row.get(7);
+                                        let created_at_str: String = row.get(8);
+                                        let updated_at_str: String = row.get(9);
+
                                         if let (std::result::Result::Ok(created_at), std::result::Result::Ok(updated_at)) = (
-                                            chrono::DateTime::parse_from_rfc3339(&row.get::<String, _>(8)),
-                                            chrono::DateTime::parse_from_rfc3339(&row.get::<String, _>(9))
+                                            chrono::DateTime::parse_from_rfc3339(&created_at_str),
+                                            chrono::DateTime::parse_from_rfc3339(&updated_at_str)
                                         ) {
                                             personas.push(task_manager::domain::persona::Persona {
-                                                id: row.get(0),
-                                                project_id: row.get(1),
-                                                name: row.get(2),
-                                                role: row.get(3),
-                                                description: row.get(4),
-                                                llm_provider: row.get(5),
-                                                llm_model: row.get(6),
-                                                is_default: row.get(7),
+                                                id,
+                                                project_id,
+                                                name,
+                                                role,
+                                                description,
+                                                llm_provider,
+                                                llm_model,
+                                                is_default,
                                                 created_at: created_at.with_timezone(&chrono::Utc),
                                                 updated_at: updated_at.with_timezone(&chrono::Utc),
                                                 enabled_tools: std::vec::Vec::new(),
@@ -1905,10 +2749,16 @@ impl App {
                                     }
                                     personas
                                 }
-                                std::result::Result::Err(_) => std::vec::Vec::new(), // Silently use empty vec if query fails
+                                std::result::Result::Err(e) => {
+                                    eprintln!("Warning: Failed to load personas from database: {:?}", e);
+                                    std::vec::Vec::new()
+                                }
                             }
                         }
-                        std::result::Result::Err(_) => std::vec::Vec::new(), // Silently use empty vec if connection fails
+                        std::result::Result::Err(e) => {
+                            eprintln!("Warning: Failed to connect to database for personas: {:?}", e);
+                            std::vec::Vec::new()
+                        }
                     };
 
                     // Start interactive generation
@@ -2160,7 +3010,7 @@ impl App {
                 let db_path = current_dir.join(".rigger/tasks.db");
                 let db_url = std::format!("sqlite:{}", db_path.display());
 
-                let mut adapter = match task_manager::adapters::sqlite_task_adapter::SqliteTaskAdapter::connect_and_init(&db_url).await {
+                let adapter = match task_manager::adapters::sqlite_task_adapter::SqliteTaskAdapter::connect_and_init(&db_url).await {
                     Ok(a) => a,
                     Err(e) => {
                         self.prd_processing_state = PRDProcessingState::Failed {
@@ -2175,6 +3025,14 @@ impl App {
                     prd.title.clone(),
                     std::option::Option::Some(std::format!("Auto-generated from PRD: {}", self.prd_processing_file)),
                 );
+
+                // Update PRD's project_id to match the newly created project
+                // This ensures artifacts and PRD reference the same project
+                let mut prd = prd;
+                prd.project_id = project.id.clone();
+
+                // Also update stored PRD for artifact ingestion later
+                self.prd_processing_prd = std::option::Option::Some(prd.clone());
 
                 // Note: Projects table already created by SqliteTaskAdapter with schema:
                 // (id, name, description, created_at, updated_at)
@@ -2257,7 +3115,7 @@ impl App {
                     }
                 }
 
-                // Auto-decompose complex tasks (complexity >= 7)
+                // Auto-decompose complex tasks (complexity >= 5)
                 let config_path = current_dir.join(".rigger/config.json");
                 if let Ok(config_content) = std::fs::read_to_string(&config_path) {
                     if let Ok(config) = serde_json::from_str::<serde_json::Value>(&config_content) {
@@ -2270,7 +3128,7 @@ impl App {
 
                         for task in &tasks {
                             if let std::option::Option::Some(complexity) = task.complexity {
-                                if complexity >= 7 {
+                                if complexity >= 5 {
                                     // Create parser for decomposition
                                     let parser = task_orchestrator::adapters::rig_prd_parser_adapter::RigPRDParserAdapter::new(
                                         model_name.to_string(),
@@ -2280,6 +3138,9 @@ impl App {
 
                                     match parser.decompose_task(task, &prd.raw_content).await {
                                         std::result::Result::Ok(generated_subtasks) => {
+                                            // Collect errors to add as notifications after the loop
+                                            let mut error_messages = std::vec::Vec::new();
+
                                             // Find parent task in conversation and add subtasks to it
                                             for msg in self.prd_gen_conversation.iter_mut().rev() {
                                                 if let MessageContent::Box(BoxContent::Task {
@@ -2293,14 +3154,14 @@ impl App {
                                                             subtasks.push(SubTaskInfo {
                                                                 title: subtask.title.clone(),
                                                                 description: subtask.description.clone(),
-                                                                assignee: subtask.assignee.clone(),
+                                                                assignee: subtask.agent_persona.clone(),
                                                                 priority: std::option::Option::None,
                                                                 complexity: subtask.complexity,
                                                             });
 
                                                             // Save subtask to database
                                                             if let Err(e) = adapter.save_async(subtask.clone()).await {
-                                                                eprintln!("Warning: Failed to save subtask: {}", e);
+                                                                error_messages.push(std::format!("Failed to save subtask: {}", e));
                                                             }
                                                         }
                                                         break; // Found and updated parent task
@@ -2313,11 +3174,19 @@ impl App {
                                             updated_parent.subtask_ids = generated_subtasks.iter().map(|st| st.id.clone()).collect();
                                             updated_parent.status = task_manager::domain::task_status::TaskStatus::Decomposed;
                                             if let Err(e) = adapter.save_async(updated_parent).await {
-                                                eprintln!("Warning: Failed to update parent task: {}", e);
+                                                error_messages.push(std::format!("Failed to update parent task: {}", e));
+                                            }
+
+                                            // Add all error notifications after the loop
+                                            for error_msg in error_messages {
+                                                self.add_notification(NotificationLevel::Warning, error_msg);
                                             }
                                         }
                                         std::result::Result::Err(e) => {
-                                            eprintln!("Warning: Decomposition failed for '{}': {}", task.title, e);
+                                            self.add_notification(
+                                                NotificationLevel::Warning,
+                                                std::format!("Decomposition failed for '{}': {}", task.title, e)
+                                            );
                                         }
                                     }
                                 }
@@ -2326,10 +3195,392 @@ impl App {
                     }
                 }
 
+                self.prd_processing_state = PRDProcessingState::AssigningPersonas;
+                true
+            }
+            PRDProcessingState::AssigningPersonas => {
+                // Assign personas to tasks using LLM in a second pass
+                let tasks = match &self.prd_processing_tasks {
+                    std::option::Option::Some(t) => t.clone(),
+                    std::option::Option::None => {
+                        // Non-fatal: skip persona assignment if tasks not available
+                        self.add_notification(
+                            NotificationLevel::Warning,
+                            std::string::String::from("Skipping persona assignment: tasks not loaded")
+                        );
+                        self.prd_processing_state = PRDProcessingState::IngestingArtifacts;
+                        return true;
+                    }
+                };
+
+                // Get personas from database
+                let personas = self.personas.clone();
+
+                if personas.is_empty() {
+                    // No personas available, skip assignment and use Default Agent
+                    self.prd_processing_state = PRDProcessingState::IngestingArtifacts;
+                    return true;
+                }
+
+                // Get config for model name
+                let config = match &self.prd_processing_config {
+                    std::option::Option::Some(c) => c.clone(),
+                    std::option::Option::None => {
+                        self.add_notification(
+                            NotificationLevel::Warning,
+                            std::string::String::from("Skipping persona assignment: config not loaded")
+                        );
+                        self.prd_processing_state = PRDProcessingState::IngestingArtifacts;
+                        return true;
+                    }
+                };
+
+                let model_name = config["task_tools"]["main"]["model"]
+                    .as_str()
+                    .unwrap_or("llama3.2:latest")
+                    .to_string();
+
+                let fallback_model = config["task_tools"]["fallback"]["model"]
+                    .as_str()
+                    .unwrap_or(&model_name)
+                    .to_string();
+
+                // Create adapter for persona assignment
+                let adapter = task_orchestrator::adapters::rig_prd_parser_adapter::RigPRDParserAdapter::new(
+                    model_name,
+                    fallback_model,
+                    personas,
+                );
+
+                // Get database connection for updating tasks
+                let current_dir = match std::env::current_dir() {
+                    std::result::Result::Ok(dir) => dir,
+                    std::result::Result::Err(e) => {
+                        self.add_notification(
+                            NotificationLevel::Warning,
+                            std::format!("Skipping persona assignment: {}", e)
+                        );
+                        self.prd_processing_state = PRDProcessingState::IngestingArtifacts;
+                        return true;
+                    }
+                };
+                let db_path = current_dir.join(".rigger/tasks.db");
+                let db_url = std::format!("sqlite:{}", db_path.display());
+
+                let db_adapter = match task_manager::adapters::sqlite_task_adapter::SqliteTaskAdapter::connect_and_init(&db_url).await {
+                    std::result::Result::Ok(a) => a,
+                    std::result::Result::Err(e) => {
+                        self.add_notification(
+                            NotificationLevel::Warning,
+                            std::format!("Skipping persona assignment: {}", e)
+                        );
+                        self.prd_processing_state = PRDProcessingState::IngestingArtifacts;
+                        return true;
+                    }
+                };
+
+                // Assign personas to each task
+                let mut updated_tasks = tasks.clone();
+                for task in &mut updated_tasks {
+                    // Call LLM to assign persona based on task title and description
+                    match adapter.assign_persona_to_task(&task.title, &task.description).await {
+                        std::result::Result::Ok(persona_name) => {
+                            task.agent_persona = std::option::Option::Some(persona_name);
+
+                            // Update task in database
+                            if let std::result::Result::Err(e) = db_adapter.save_async(task.clone()).await {
+                                self.add_notification(
+                                    NotificationLevel::Warning,
+                                    std::format!("Failed to update task with persona: {}", e)
+                                );
+                            }
+                        }
+                        std::result::Result::Err(e) => {
+                            self.add_notification(
+                                NotificationLevel::Warning,
+                                std::format!("Failed to assign persona to task '{}': {}", task.title, e)
+                            );
+                            // Continue with Default Agent (already None/Some("Default Agent"))
+                        }
+                    }
+                }
+
+                // Update stored tasks with assigned personas
+                self.prd_processing_tasks = std::option::Option::Some(updated_tasks);
+
+                self.prd_processing_state = PRDProcessingState::IngestingArtifacts;
+                true
+            }
+            PRDProcessingState::IngestingArtifacts => {
+                // Get PRD and content for artifact ingestion
+                let prd = match &self.prd_processing_prd {
+                    std::option::Option::Some(p) => p.clone(),
+                    std::option::Option::None => {
+                        // Non-fatal: skip artifact ingestion if PRD not available
+                        self.add_notification(
+                            NotificationLevel::Warning,
+                            String::from("Skipping RAG ingestion: PRD not loaded")
+                        );
+                        self.prd_processing_artifact_count = 0;
+                        self.prd_processing_state = PRDProcessingState::DecomposingTasks;
+                        return true;
+                    }
+                };
+
+                let prd_content = match &self.prd_processing_content {
+                    std::option::Option::Some(c) => c.clone(),
+                    std::option::Option::None => prd.raw_content.clone(),
+                };
+
+                // Get database path
+                let current_dir = match std::env::current_dir() {
+                    std::result::Result::Ok(dir) => dir,
+                    std::result::Result::Err(e) => {
+                        self.add_notification(
+                            NotificationLevel::Warning,
+                            std::format!("Skipping RAG ingestion: {}", e)
+                        );
+                        self.prd_processing_artifact_count = 0;
+                        self.prd_processing_state = PRDProcessingState::DecomposingTasks;
+                        return true;
+                    }
+                };
+                let db_path = current_dir.join(".rigger/tasks.db");
+                let db_url = std::format!("sqlite:{}", db_path.display());
+
+                // Get provider from config (default to ollama)
+                let provider = self.prd_processing_config
+                    .as_ref()
+                    .and_then(|c| c["provider"].as_str())
+                    .unwrap_or("ollama");
+
+                // Create artifact repository adapter
+                let artifact_adapter = match task_manager::adapters::sqlite_artifact_adapter::SqliteArtifactAdapter::connect_and_init(&db_url).await {
+                    std::result::Result::Ok(adapter) => adapter,
+                    std::result::Result::Err(e) => {
+                        self.add_notification(
+                            NotificationLevel::Warning,
+                            std::format!("Skipping RAG ingestion: artifact DB connection failed - {}", e)
+                        );
+                        self.prd_processing_artifact_count = 0;
+                        self.prd_processing_state = PRDProcessingState::DecomposingTasks;
+                        return true;
+                    }
+                };
+
+                // Create embedding adapter using provider factory
+                let provider_factory = match task_orchestrator::adapters::provider_factory::ProviderFactory::new(provider, "default") {
+                    std::result::Result::Ok(factory) => factory,
+                    std::result::Result::Err(e) => {
+                        self.add_notification(
+                            NotificationLevel::Warning,
+                            std::format!("Skipping RAG ingestion: provider factory failed - {}", e)
+                        );
+                        self.prd_processing_artifact_count = 0;
+                        self.prd_processing_state = PRDProcessingState::DecomposingTasks;
+                        return true;
+                    }
+                };
+
+                let embedding_adapter = match provider_factory.create_embedding_adapter() {
+                    std::result::Result::Ok(adapter) => adapter,
+                    std::result::Result::Err(e) => {
+                        self.add_notification(
+                            NotificationLevel::Warning,
+                            std::format!("Skipping RAG ingestion: embedding adapter failed - {}", e)
+                        );
+                        self.prd_processing_artifact_count = 0;
+                        self.prd_processing_state = PRDProcessingState::DecomposingTasks;
+                        return true;
+                    }
+                };
+
+                // Create artifact service
+                let artifact_service = task_orchestrator::services::artifact_service::ArtifactService::new(
+                    std::sync::Arc::new(std::sync::Mutex::new(artifact_adapter)),
+                    embedding_adapter,
+                );
+
+                // Ingest PRD content as artifacts
+                match artifact_service.ingest_prd(
+                    prd.project_id.clone(),
+                    prd.id.clone(),
+                    prd_content.clone(),
+                ).await {
+                    std::result::Result::Ok(artifacts) => {
+                        let artifact_count = artifacts.len();
+                        self.prd_processing_artifact_count = artifact_count;
+
+                        // Create content preview from first artifact
+                        let content_preview = if let std::option::Option::Some(first) = artifacts.first() {
+                            truncate_string(&first.content, 80)
+                        } else {
+                            String::from("No content")
+                        };
+
+                        // Push artifact box to conversation for green display
+                        self.prd_gen_conversation.push(PRDGenMessage {
+                            role: PRDGenRole::System,
+                            content: MessageContent::Box(BoxContent::Artifact {
+                                source_type: String::from("PRD"),
+                                content_preview,
+                                count: artifact_count,
+                            }),
+                            timestamp: chrono::Utc::now(),
+                        });
+
+                        self.add_notification(
+                            NotificationLevel::Success,
+                            std::format!("Ingested {} knowledge artifacts with embeddings", artifact_count)
+                        );
+                    }
+                    std::result::Result::Err(e) => {
+                        self.add_notification(
+                            NotificationLevel::Warning,
+                            std::format!("RAG ingestion failed (non-fatal): {}", e)
+                        );
+                        self.prd_processing_artifact_count = 0;
+                    }
+                }
+
+                self.prd_processing_state = PRDProcessingState::LinkingArtifacts;
+                true
+            }
+            PRDProcessingState::LinkingArtifacts => {
+                // Link artifacts to tasks using semantic similarity
+                // Only proceed if we have tasks and artifacts
+                let tasks = self.prd_processing_tasks.clone().unwrap_or_default();
+                let artifact_count = self.prd_processing_artifact_count;
+
+                if tasks.is_empty() || artifact_count == 0 {
+                    // Nothing to link, skip to decomposition
+                    self.prd_processing_state = PRDProcessingState::DecomposingTasks;
+                    return true;
+                }
+
+                // Get embedding adapter and artifact adapter
+                let config = self.prd_processing_config.clone();
+                let provider = config
+                    .as_ref()
+                    .and_then(|c| c.get("task_tools"))
+                    .and_then(|tt| tt.get("embedding"))
+                    .and_then(|e| e.get("provider"))
+                    .and_then(|p| p.as_str())
+                    .unwrap_or("ollama");
+
+                let model = config
+                    .as_ref()
+                    .and_then(|c| c.get("task_tools"))
+                    .and_then(|tt| tt.get("embedding"))
+                    .and_then(|e| e.get("model"))
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("nomic-embed-text");
+
+                // Create embedding adapter
+                let embedding_adapter: std::sync::Arc<dyn task_orchestrator::ports::embedding_port::EmbeddingPort + Send + Sync> =
+                    if provider == "openai" {
+                        let api_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
+                        std::sync::Arc::new(task_orchestrator::adapters::rig_embedding_adapter::RigEmbeddingAdapter::new_openai(
+                            api_key,
+                            String::from(model),
+                        ))
+                    } else {
+                        std::sync::Arc::new(task_orchestrator::adapters::rig_embedding_adapter::RigEmbeddingAdapter::new_ollama(
+                            String::from(model),
+                        ))
+                    };
+
+                // Get database URL
+                let db_path = std::path::PathBuf::from(".rigger/tasks.db");
+                let db_url = std::format!("sqlite:{}", db_path.display());
+
+                // Create artifact adapter for vector search
+                match task_manager::adapters::sqlite_artifact_adapter::SqliteArtifactAdapter::connect_and_init(&db_url).await {
+                    std::result::Result::Ok(artifact_adapter) => {
+                        // Create task adapter for linking
+                        match task_manager::adapters::sqlite_task_adapter::SqliteTaskAdapter::connect_and_init(&db_url).await {
+                            std::result::Result::Ok(task_adapter) => {
+                                let mut linked_count = 0;
+
+                                for task in &tasks {
+                                    // Generate embedding for task content
+                                    let task_text = std::format!("{} {}", task.title, task.description);
+
+                                    match embedding_adapter.generate_embedding(&task_text).await {
+                                        std::result::Result::Ok(query_embedding) => {
+                                            // Search for similar artifacts (top 5)
+                                            match artifact_adapter.search_similar(&query_embedding, 5, 0.3).await {
+                                                std::result::Result::Ok(similar_artifacts) => {
+                                                    if !similar_artifacts.is_empty() {
+                                                        // Convert to (artifact_id, score) pairs
+                                                        let artifact_scores: std::vec::Vec<(String, f32)> = similar_artifacts
+                                                            .iter()
+                                                            .map(|(artifact, score)| (artifact.id.clone(), *score))
+                                                            .collect();
+
+                                                        // Link task to artifacts
+                                                        if let std::result::Result::Ok(count) = task_adapter.link_task_to_artifacts(&task.id, &artifact_scores).await {
+                                                            linked_count += count;
+                                                        }
+                                                    }
+                                                }
+                                                std::result::Result::Err(_) => {
+                                                    // Silently skip - vector search may not be available
+                                                }
+                                            }
+                                        }
+                                        std::result::Result::Err(_) => {
+                                            // Silently skip if embedding fails for this task
+                                        }
+                                    }
+                                }
+
+                                if linked_count > 0 {
+                                    self.add_notification(
+                                        NotificationLevel::Success,
+                                        std::format!("Linked {} artifacts to tasks via semantic similarity", linked_count)
+                                    );
+                                }
+                            }
+                            std::result::Result::Err(e) => {
+                                self.add_notification(
+                                    NotificationLevel::Warning,
+                                    std::format!("Artifact linking skipped (task adapter): {}", e)
+                                );
+                            }
+                        }
+                    }
+                    std::result::Result::Err(e) => {
+                        self.add_notification(
+                            NotificationLevel::Warning,
+                            std::format!("Artifact linking skipped (artifact adapter): {}", e)
+                        );
+                    }
+                }
+
+                self.prd_processing_state = PRDProcessingState::DecomposingTasks;
+                true
+            }
+            PRDProcessingState::DecomposingTasks => {
+                // This is now handled inline during SavingTasks
+                // Just transition to reload
                 self.prd_processing_state = PRDProcessingState::ReloadingTasks;
                 true
             }
             PRDProcessingState::ReloadingTasks => {
+                // Reload projects, PRDs, and tasks (all were created/updated during processing)
+                if let Err(e) = self.load_projects().await {
+                    self.prd_processing_state = PRDProcessingState::Failed {
+                        error: std::format!("Failed to reload projects: {}", e),
+                    };
+                    return false;
+                }
+                if let Err(e) = self.load_prds().await {
+                    self.prd_processing_state = PRDProcessingState::Failed {
+                        error: std::format!("Failed to reload PRDs: {}", e),
+                    };
+                    return false;
+                }
                 if let Err(e) = self.load_tasks().await {
                     self.prd_processing_state = PRDProcessingState::Failed {
                         error: std::format!("Tasks saved but failed to reload: {}", e),
@@ -2338,7 +3589,24 @@ impl App {
                 }
 
                 let task_count = self.prd_processing_tasks.as_ref().map(|t| t.len()).unwrap_or(0);
-                self.prd_processing_state = PRDProcessingState::Complete { task_count };
+                let artifact_count = self.prd_processing_artifact_count;
+
+                // Calculate complexity distribution
+                if let std::option::Option::Some(tasks) = &self.prd_processing_tasks {
+                    self.prd_processing_complexity_counts.clear();
+                    for task in tasks {
+                        if let std::option::Option::Some(complexity) = task.complexity {
+                            *self.prd_processing_complexity_counts.entry(complexity).or_insert(0) += 1;
+                        }
+                    }
+                }
+
+                // TODO: Track actual subtask count during decomposition
+                self.prd_processing_state = PRDProcessingState::Complete {
+                    task_count,
+                    artifact_count,
+                    subtask_count: 0,
+                };
 
                 self.add_notification(
                     NotificationLevel::Success,
@@ -2353,10 +3621,12 @@ impl App {
         }
     }
 
-    /// Cycles to the next dashboard tool (Kanban -> Metrics -> DevTools).
+    /// Cycles to the next dashboard tool (Kanban -> PRD View -> Artifacts -> Metrics -> DevTools).
     fn next_tool(&mut self) {
         self.active_tool = match self.active_tool {
-            DashboardTool::Kanban => DashboardTool::Metrics,
+            DashboardTool::Kanban => DashboardTool::PRDView,
+            DashboardTool::PRDView => DashboardTool::ArtifactViewer,
+            DashboardTool::ArtifactViewer => DashboardTool::Metrics,
             DashboardTool::Metrics => DashboardTool::DevTools,
             DashboardTool::DevTools => DashboardTool::Kanban,
             // TaskEditor and LLMChat are dialog-only
@@ -2365,11 +3635,13 @@ impl App {
         };
     }
 
-    /// Cycles to the previous dashboard tool (DevTools <- Metrics <- Kanban).
+    /// Cycles to the previous dashboard tool (DevTools <- Metrics <- Artifacts <- PRD View <- Kanban).
     fn previous_tool(&mut self) {
         self.active_tool = match self.active_tool {
             DashboardTool::Kanban => DashboardTool::DevTools,
-            DashboardTool::Metrics => DashboardTool::Kanban,
+            DashboardTool::PRDView => DashboardTool::Kanban,
+            DashboardTool::ArtifactViewer => DashboardTool::PRDView,
+            DashboardTool::Metrics => DashboardTool::ArtifactViewer,
             DashboardTool::DevTools => DashboardTool::Metrics,
             // TaskEditor and LLMChat are dialog-only
             DashboardTool::TaskEditor => DashboardTool::Metrics,
@@ -2392,46 +3664,72 @@ impl App {
             return;
         }
 
-        // Find current project index
-        let current_idx = if let std::option::Option::Some(ref id) = self.selected_project_id {
-            self.projects.iter().position(|p| &p.id == id).unwrap_or(0)
+        // Navigation order: None (All Projects) -> Project 0 -> Project 1 -> ... -> None
+        // Total positions = projects.len() + 1 (for "All Projects")
+        let total_positions = self.projects.len() + 1;
+
+        // Find current position (0 = All Projects, 1+ = specific project)
+        let current_pos = if let std::option::Option::Some(ref id) = self.selected_project_id {
+            self.projects.iter().position(|p| &p.id == id)
+                .map(|idx| idx + 1)
+                .unwrap_or(0)
         } else {
-            0
+            0  // All Projects
         };
 
-        // Move to next project (wrap around)
-        let next_idx = (current_idx + 1) % self.projects.len();
-        self.selected_project_id = std::option::Option::Some(self.projects[next_idx].id.clone());
+        // Move to next position (wrap around)
+        let next_pos = (current_pos + 1) % total_positions;
 
-        // TODO: Re-filter tasks and PRDs (will be implemented when loading from DB)
+        // Set selected_project_id based on position
+        if next_pos == 0 {
+            self.selected_project_id = std::option::Option::None;  // All Projects
+        } else {
+            self.selected_project_id = std::option::Option::Some(self.projects[next_pos - 1].id.clone());
+        }
+
+        // Reset selection state when changing projects
+        self.selected_project_row = 0;
+        self.selected_task_in_column = 0;
     }
 
     /// Cycles to the previous project.
     ///
-    /// Switches to the previous project in the projects list, wrapping around
-    /// to the last project before the first one. After switching, re-filters
-    /// tasks and PRDs to show only those belonging to the selected project.
+    /// Navigation order: None (All Projects) <- Project 0 <- Project 1 <- ...
+    /// Wraps from "All Projects" to last project.
     fn previous_workspace(&mut self) {
         if self.projects.is_empty() {
             return;
         }
 
-        // Find current project index
-        let current_idx = if let std::option::Option::Some(ref id) = self.selected_project_id {
-            self.projects.iter().position(|p| &p.id == id).unwrap_or(0)
+        // Total positions = projects.len() + 1 (for "All Projects")
+        let total_positions = self.projects.len() + 1;
+
+        // Find current position (0 = All Projects, 1+ = specific project)
+        let current_pos = if let std::option::Option::Some(ref id) = self.selected_project_id {
+            self.projects.iter().position(|p| &p.id == id)
+                .map(|idx| idx + 1)
+                .unwrap_or(0)
         } else {
-            0
+            0  // All Projects
         };
 
-        // Move to previous project (wrap around)
-        let prev_idx = if current_idx == 0 {
-            self.projects.len() - 1
+        // Move to previous position (wrap around)
+        let prev_pos = if current_pos == 0 {
+            total_positions - 1
         } else {
-            current_idx - 1
+            current_pos - 1
         };
-        self.selected_project_id = std::option::Option::Some(self.projects[prev_idx].id.clone());
 
-        // TODO: Re-filter tasks and PRDs (will be implemented when loading from DB)
+        // Set selected_project_id based on position
+        if prev_pos == 0 {
+            self.selected_project_id = std::option::Option::None;  // All Projects
+        } else {
+            self.selected_project_id = std::option::Option::Some(self.projects[prev_pos - 1].id.clone());
+        }
+
+        // Reset selection state when changing projects
+        self.selected_project_row = 0;
+        self.selected_task_in_column = 0;
     }
 
     /// Returns the currently selected project, if any.
@@ -2627,6 +3925,9 @@ impl App {
     /// Toggles the notification center dialog.
     fn toggle_notifications(&mut self) {
         self.show_notifications = !self.show_notifications;
+        if self.show_notifications {
+            self.selected_notification = 0;
+        }
     }
 
     /// Opens the task editor dialog for the currently selected task (Phase 4).
@@ -2665,7 +3966,7 @@ impl App {
                 TaskEditorField::Description
             }
             TaskEditorField::Description => {
-                self.task_editor_input = task.assignee.clone().unwrap_or_default();
+                self.task_editor_input = task.agent_persona.clone().unwrap_or_default();
                 TaskEditorField::Assignee
             }
             TaskEditorField::Assignee => {
@@ -2702,7 +4003,7 @@ impl App {
                 TaskEditorField::Description
             }
             TaskEditorField::Status => {
-                self.task_editor_input = task.assignee.clone().unwrap_or_default();
+                self.task_editor_input = task.agent_persona.clone().unwrap_or_default();
                 TaskEditorField::Assignee
             }
         };
@@ -2775,6 +4076,48 @@ impl App {
         };
     }
 
+    /// Cycles assignee forward through personas in the task editor.
+    fn cycle_assignee_forward(&mut self) {
+        if self.task_editor_field != TaskEditorField::Assignee || self.personas.is_empty() {
+            return;
+        }
+
+        // Find current assignee in personas list
+        let current_idx = self.personas.iter().position(|p| p.name == self.task_editor_input);
+
+        if let std::option::Option::Some(idx) = current_idx {
+            // Cycle to next persona
+            let next_idx = (idx + 1) % self.personas.len();
+            self.task_editor_input = self.personas[next_idx].name.clone();
+        } else if !self.personas.is_empty() {
+            // Not in list or empty input - select first persona
+            self.task_editor_input = self.personas[0].name.clone();
+        }
+    }
+
+    /// Cycles assignee backward through personas in the task editor.
+    fn cycle_assignee_backward(&mut self) {
+        if self.task_editor_field != TaskEditorField::Assignee || self.personas.is_empty() {
+            return;
+        }
+
+        // Find current assignee in personas list
+        let current_idx = self.personas.iter().position(|p| p.name == self.task_editor_input);
+
+        if let std::option::Option::Some(idx) = current_idx {
+            // Cycle to previous persona
+            let prev_idx = if idx == 0 {
+                self.personas.len() - 1
+            } else {
+                idx - 1
+            };
+            self.task_editor_input = self.personas[prev_idx].name.clone();
+        } else if !self.personas.is_empty() {
+            // Not in list or empty input - select last persona
+            self.task_editor_input = self.personas[self.personas.len() - 1].name.clone();
+        }
+    }
+
     /// Saves the task editor changes to the currently selected task (Phase 4).
     async fn save_task_editor(&mut self) -> anyhow::Result<()> {
         if self.tasks.is_empty() {
@@ -2791,7 +4134,7 @@ impl App {
                 task.description = self.task_editor_input.clone();
             }
             TaskEditorField::Assignee => {
-                task.assignee = if self.task_editor_input.is_empty() {
+                task.agent_persona = if self.task_editor_input.is_empty() {
                     std::option::Option::None
                 } else {
                     std::option::Option::Some(self.task_editor_input.clone())
@@ -2818,6 +4161,16 @@ impl App {
                         NotificationLevel::Success,
                         std::format!("Saved task: {}", task_title)
                     );
+
+                    // Update PRD view if the edited task is in the current PRD view
+                    let edited_task = &self.tasks[self.selected_task];
+                    if let std::option::Option::Some(prd_task) = self.prd_view_tasks.iter_mut().find(|t| t.id == edited_task.id) {
+                        prd_task.title = edited_task.title.clone();
+                        prd_task.description = edited_task.description.clone();
+                        prd_task.agent_persona = edited_task.agent_persona.clone();
+                        prd_task.status = edited_task.status.clone();
+                        prd_task.updated_at = edited_task.updated_at;
+                    }
                 }
                 std::result::Result::Err(e) => {
                     self.is_saving = false;
@@ -3061,7 +4414,7 @@ impl App {
             id: uuid::Uuid::new_v4().to_string(),
             title: self.task_creator_title.clone(),
             description: self.task_creator_description.clone(),
-            assignee: if self.task_creator_assignee.is_empty() {
+            agent_persona: if self.task_creator_assignee.is_empty() {
                 std::option::Option::None
             } else {
                 std::option::Option::Some(self.task_creator_assignee.clone())
@@ -3081,6 +4434,7 @@ impl App {
             completion_summary: std::option::Option::None,
             context_files: std::vec::Vec::new(),
             dependencies: std::vec::Vec::new(),
+            sort_order: std::option::Option::None,
         };
 
         // Link to first PRD of current project (if available)
@@ -3125,8 +4479,27 @@ impl App {
         std::result::Result::Ok(())
     }
 
-    /// Performs fuzzy search across tasks, PRDs, and projects (Phase 9).
-    fn search_all(&self, query: &str) -> std::vec::Vec<SearchResultType> {
+    /// Computes cosine similarity between two embedding vectors.
+    /// Returns a score between 0.0 (completely different) and 1.0 (identical).
+    fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
+        if a.len() != b.len() || a.is_empty() {
+            return 0.0;
+        }
+
+        let dot_product: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+        let magnitude_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+        let magnitude_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+
+        if magnitude_a == 0.0 || magnitude_b == 0.0 {
+            return 0.0;
+        }
+
+        dot_product / (magnitude_a * magnitude_b)
+    }
+
+    /// Performs hybrid search across tasks, PRDs, projects, and artifacts.
+    /// Uses semantic search when embedding adapter is available, falls back to substring matching otherwise.
+    async fn search_all(&self, query: &str) -> std::vec::Vec<SearchResultType> {
         if query.is_empty() {
             return std::vec::Vec::new();
         }
@@ -3134,37 +4507,137 @@ impl App {
         let query_lower = query.to_lowercase();
         let mut results = std::vec::Vec::new();
 
-        // Search tasks
-        for task in &self.tasks {
-            if task.title.to_lowercase().contains(&query_lower)
-                || task.description.to_lowercase().contains(&query_lower) {
-                results.push(SearchResultType::Task {
-                    id: task.id.clone(),
-                    title: task.title.clone(),
-                    description: task.description.clone(),
-                });
+        // Try to get query embedding for semantic search
+        let query_embedding = if let Some(embedding_adapter) = &self.embedding_adapter {
+            embedding_adapter.generate_embedding(query).await.ok()
+        } else {
+            None
+        };
+
+        // Search tasks (semantic if available, otherwise substring)
+        let mut task_semantic_results_added = false;
+        if let Some(ref query_emb) = query_embedding {
+            if let Some(embedding_adapter) = &self.embedding_adapter {
+                // Generate embeddings for all tasks and compute similarity
+                for task in &self.tasks {
+                    let task_text = std::format!("{} {}", task.title, task.description);
+                    if let std::result::Result::Ok(task_emb) = embedding_adapter.generate_embedding(&task_text).await {
+                        let similarity = Self::cosine_similarity(query_emb, &task_emb);
+                        if similarity >= 0.2 {  // Threshold for semantic match
+                            results.push(SearchResultType::Task {
+                                id: task.id.clone(),
+                                title: task.title.clone(),
+                                description: task.description.clone(),
+                                score: Some(similarity),
+                            });
+                        }
+                    }
+                }
+                task_semantic_results_added = true;
             }
         }
 
-        // Search PRDs
+        // Fallback to substring matching for tasks if semantic search not available
+        if !task_semantic_results_added {
+            for task in &self.tasks {
+                if task.title.to_lowercase().contains(&query_lower)
+                    || task.description.to_lowercase().contains(&query_lower) {
+                    results.push(SearchResultType::Task {
+                        id: task.id.clone(),
+                        title: task.title.clone(),
+                        description: task.description.clone(),
+                        score: None,
+                    });
+                }
+            }
+        }
+
+        // Search PRDs (substring matching)
         for prd in &self.prds {
             if prd.title.to_lowercase().contains(&query_lower) {
                 results.push(SearchResultType::PRD {
                     id: prd.id.clone(),
                     title: prd.title.clone(),
+                    score: None,
                 });
             }
         }
 
-        // Search projects
+        // Search projects (substring matching)
         for project in &self.projects {
             if project.name.to_lowercase().contains(&query_lower) {
                 results.push(SearchResultType::Project {
                     id: project.id.clone(),
                     name: project.name.clone(),
+                    score: None,
                 });
             }
         }
+
+        // Search artifacts - try semantic search first, fall back to substring
+        let mut artifact_results_added = false;
+
+        if let Some(ref query_emb) = query_embedding {
+            if let Some(artifact_adapter) = &self.artifact_adapter {
+                // Use already-generated query embedding for artifact search
+                if let std::result::Result::Ok(similar_artifacts) = artifact_adapter.search_similar(query_emb, 30, 0.8).await {
+                    for (artifact, distance) in similar_artifacts {
+                        // Convert distance to similarity: distance 0.0 (identical) -> similarity 1.0 (100%)
+                        // distance 2.0 (opposite) -> similarity 0.0 (0%)
+                        let similarity = 1.0 - (distance / 2.0);
+                        let content_preview = truncate_string(&artifact.content, 100);
+                        results.push(SearchResultType::Artifact {
+                            id: artifact.id.clone(),
+                            source_type: std::format!("{:?}", artifact.source_type),
+                            content_preview,
+                            project_id: artifact.project_id.clone(),
+                            score: Some(similarity),
+                        });
+                    }
+                    artifact_results_added = true;
+                }
+            }
+        }
+
+        // Fallback to substring matching for artifacts if semantic search not available or failed
+        if !artifact_results_added {
+            for artifact in &self.artifacts {
+                if artifact.content.to_lowercase().contains(&query_lower)
+                    || artifact.source_id.to_lowercase().contains(&query_lower) {
+                    let content_preview = truncate_string(&artifact.content, 100);
+                    results.push(SearchResultType::Artifact {
+                        id: artifact.id.clone(),
+                        source_type: std::format!("{:?}", artifact.source_type),
+                        content_preview,
+                        project_id: artifact.project_id.clone(),
+                        score: None,
+                    });
+                }
+            }
+        }
+
+        // Sort results by score (highest first), with None scores at the end
+        results.sort_by(|a, b| {
+            let score_a = match a {
+                SearchResultType::Task { score, .. } => *score,
+                SearchResultType::PRD { score, .. } => *score,
+                SearchResultType::Project { score, .. } => *score,
+                SearchResultType::Artifact { score, .. } => *score,
+            };
+            let score_b = match b {
+                SearchResultType::Task { score, .. } => *score,
+                SearchResultType::PRD { score, .. } => *score,
+                SearchResultType::Project { score, .. } => *score,
+                SearchResultType::Artifact { score, .. } => *score,
+            };
+            // Sort: Some scores first (highest to lowest), then None scores
+            match (score_a, score_b) {
+                (Some(a), Some(b)) => b.partial_cmp(&a).unwrap_or(std::cmp::Ordering::Equal),
+                (Some(_), None) => std::cmp::Ordering::Less,
+                (None, Some(_)) => std::cmp::Ordering::Greater,
+                (None, None) => std::cmp::Ordering::Equal,
+            }
+        });
 
         results
     }
@@ -3186,16 +4659,16 @@ impl App {
     }
 
     /// Handles character input in spotlight search (Phase 9).
-    fn handle_spotlight_input(&mut self, c: char) {
+    async fn handle_spotlight_input(&mut self, c: char) {
         self.spotlight_query.push(c);
-        self.spotlight_results = self.search_all(&self.spotlight_query);
+        self.spotlight_results = self.search_all(&self.spotlight_query).await;
         self.spotlight_selected = 0; // Reset selection to top
     }
 
     /// Handles backspace in spotlight search (Phase 9).
-    fn handle_spotlight_backspace(&mut self) {
+    async fn handle_spotlight_backspace(&mut self) {
         self.spotlight_query.pop();
-        self.spotlight_results = self.search_all(&self.spotlight_query);
+        self.spotlight_results = self.search_all(&self.spotlight_query).await;
         self.spotlight_selected = 0; // Reset selection to top
     }
 
@@ -3254,6 +4727,22 @@ impl App {
                     NotificationLevel::Success,
                     String::from("Switched project")
                 );
+            }
+            SearchResultType::Artifact { id, content_preview, .. } => {
+                // Copy artifact content to clipboard
+                if let std::option::Option::Some(clipboard) = &self.clipboard {
+                    let _ = clipboard.copy_text(content_preview);
+                    let id_preview = truncate_string(id, 8);
+                    self.add_notification(
+                        NotificationLevel::Success,
+                        std::format!("Copied artifact {} to clipboard", id_preview)
+                    );
+                } else {
+                    self.add_notification(
+                        NotificationLevel::Warning,
+                        String::from("Clipboard unavailable")
+                    );
+                }
             }
         }
 
@@ -3409,29 +4898,40 @@ impl App {
             return std::result::Result::Err(e);
         }
 
-        // Reload tasks (similar to initial load)
-        let current_dir = std::env::current_dir()?;
-        let db_path = current_dir.join(".rigger").join("tasks.db");
+        // Reload tasks (this also initializes db_adapter and artifact_adapter)
+        if let std::result::Result::Err(e) = self.load_tasks().await {
+            self.add_notification(
+                NotificationLevel::Warning,
+                std::format!("Failed to load tasks: {}", e)
+            );
+            // Non-fatal - continue loading other data
+        }
 
-        if db_path.exists() {
-            if let std::option::Option::Some(adapter) = &self.db_adapter {
-                let filter = task_manager::ports::task_repository_port::TaskFilter::All;
-                let opts = hexser::ports::repository::FindOptions {
-                    sort: std::option::Option::Some(std::vec![hexser::ports::repository::Sort {
-                        key: task_manager::ports::task_repository_port::TaskSortKey::CreatedAt,
-                        direction: hexser::ports::repository::Direction::Desc,
-                    }]),
-                    limit: std::option::Option::Some(100),
-                    offset: std::option::Option::None,
-                };
+        // Reload PRDs
+        if let std::result::Result::Err(e) = self.load_prds().await {
+            self.add_notification(
+                NotificationLevel::Warning,
+                std::format!("Failed to load PRDs: {}", e)
+            );
+            // Non-fatal - continue loading other data
+        }
 
-                self.tasks = task_manager::adapters::sqlite_task_adapter::SqliteTaskAdapter::find_async(adapter, &filter, opts)
-                    .await
-                    .map_err(|e| anyhow::anyhow!("{:?}", e))?;
+        // Reload artifacts
+        if let std::result::Result::Err(e) = self.load_artifacts().await {
+            self.add_notification(
+                NotificationLevel::Warning,
+                std::format!("Failed to load artifacts: {}", e)
+            );
+            // Non-fatal - continue loading other data
+        }
 
-                // Reload PRDs (placeholder - PRD adapter usage similar pattern)
-                // For now, PRDs will be loaded if we have a PRD adapter
-            }
+        // Reload personas (for Assignee dropdown in task editor)
+        if let std::result::Result::Err(e) = self.load_personas().await {
+            self.add_notification(
+                NotificationLevel::Warning,
+                std::format!("Failed to load personas: {}", e)
+            );
+            // Non-fatal - continue loading other data
         }
 
         // Clear loading state
@@ -3441,7 +4941,7 @@ impl App {
         // Add success notification
         self.add_notification(
             NotificationLevel::Success,
-            std::format!("Refreshed: {} projects, {} tasks", self.projects.len(), self.tasks.len())
+            std::format!("Refreshed: {} projects, {} PRDs, {} tasks", self.projects.len(), self.prds.len(), self.tasks.len())
         );
 
         std::result::Result::Ok(())
@@ -3592,6 +5092,238 @@ impl App {
         tasks_in_column.get(self.selected_task_in_column).cloned()
     }
 
+    /// Moves the selected task up in the TODO column (decreases sort_order).
+    /// Only works when viewing the TODO column (F1).
+    async fn move_task_up(&mut self) -> std::result::Result<(), String> {
+        // Only allow reordering in TODO column
+        if self.selected_column != KanbanColumn::Todo {
+            return std::result::Result::Ok(());
+        }
+
+        let tasks_in_column = self.get_tasks_in_selected_column();
+        if tasks_in_column.is_empty() || self.selected_task_in_column == 0 {
+            return std::result::Result::Ok(());
+        }
+
+        let current_idx = self.selected_task_in_column;
+        let prev_idx = current_idx - 1;
+
+        // Get the task IDs and current sort orders
+        let current_task = &tasks_in_column[current_idx];
+        let prev_task = &tasks_in_column[prev_idx];
+
+        let current_id = current_task.id.clone();
+        let prev_id = prev_task.id.clone();
+
+        // Calculate new sort orders (swap positions)
+        let current_order = current_task.sort_order.unwrap_or(current_idx as i32 * 1000);
+        let prev_order = prev_task.sort_order.unwrap_or(prev_idx as i32 * 1000);
+
+        // Update tasks in memory
+        for task in &mut self.tasks {
+            if task.id == current_id {
+                task.sort_order = std::option::Option::Some(prev_order);
+                task.updated_at = chrono::Utc::now();
+            } else if task.id == prev_id {
+                task.sort_order = std::option::Option::Some(current_order);
+                task.updated_at = chrono::Utc::now();
+            }
+        }
+
+        // Save to database
+        if let std::option::Option::Some(ref adapter) = self.db_adapter {
+            for task in &self.tasks {
+                if task.id == current_id || task.id == prev_id {
+                    if let std::result::Result::Err(e) = adapter.save_async(task.clone()).await {
+                        return std::result::Result::Err(std::format!("Failed to save task: {}", e));
+                    }
+                }
+            }
+        }
+
+        // Move selection up to follow the task
+        self.selected_task_in_column = prev_idx;
+
+        std::result::Result::Ok(())
+    }
+
+    /// Moves the selected task down in the TODO column (increases sort_order).
+    /// Only works when viewing the TODO column (F1).
+    async fn move_task_down(&mut self) -> std::result::Result<(), String> {
+        // Only allow reordering in TODO column
+        if self.selected_column != KanbanColumn::Todo {
+            return std::result::Result::Ok(());
+        }
+
+        let tasks_in_column = self.get_tasks_in_selected_column();
+        if tasks_in_column.is_empty() || self.selected_task_in_column >= tasks_in_column.len() - 1 {
+            return std::result::Result::Ok(());
+        }
+
+        let current_idx = self.selected_task_in_column;
+        let next_idx = current_idx + 1;
+
+        // Get the task IDs and current sort orders
+        let current_task = &tasks_in_column[current_idx];
+        let next_task = &tasks_in_column[next_idx];
+
+        let current_id = current_task.id.clone();
+        let next_id = next_task.id.clone();
+
+        // Calculate new sort orders (swap positions)
+        let current_order = current_task.sort_order.unwrap_or(current_idx as i32 * 1000);
+        let next_order = next_task.sort_order.unwrap_or(next_idx as i32 * 1000);
+
+        // Update tasks in memory
+        for task in &mut self.tasks {
+            if task.id == current_id {
+                task.sort_order = std::option::Option::Some(next_order);
+                task.updated_at = chrono::Utc::now();
+            } else if task.id == next_id {
+                task.sort_order = std::option::Option::Some(current_order);
+                task.updated_at = chrono::Utc::now();
+            }
+        }
+
+        // Save to database
+        if let std::option::Option::Some(ref adapter) = self.db_adapter {
+            for task in &self.tasks {
+                if task.id == current_id || task.id == next_id {
+                    if let std::result::Result::Err(e) = adapter.save_async(task.clone()).await {
+                        return std::result::Result::Err(std::format!("Failed to save task: {}", e));
+                    }
+                }
+            }
+        }
+
+        // Move selection down to follow the task
+        self.selected_task_in_column = next_idx;
+
+        std::result::Result::Ok(())
+    }
+
+    /// Moves the selected task up in PRD view (decreases sort_order).
+    async fn move_prd_task_up(&mut self) -> std::result::Result<(), String> {
+        if self.prd_view_tasks.is_empty() || self.prd_view_selected_task == 0 {
+            return std::result::Result::Ok(());
+        }
+
+        let current_idx = self.prd_view_selected_task;
+        let prev_idx = current_idx - 1;
+
+        // Get the task IDs and current sort orders
+        let current_task = &self.prd_view_tasks[current_idx];
+        let prev_task = &self.prd_view_tasks[prev_idx];
+
+        let current_id = current_task.id.clone();
+        let prev_id = prev_task.id.clone();
+
+        // Calculate new sort orders (swap positions)
+        let current_order = current_task.sort_order.unwrap_or(current_idx as i32 * 1000);
+        let prev_order = prev_task.sort_order.unwrap_or(prev_idx as i32 * 1000);
+
+        // Update tasks in memory (both prd_view_tasks and main tasks list)
+        for task in &mut self.prd_view_tasks {
+            if task.id == current_id {
+                task.sort_order = std::option::Option::Some(prev_order);
+                task.updated_at = chrono::Utc::now();
+            } else if task.id == prev_id {
+                task.sort_order = std::option::Option::Some(current_order);
+                task.updated_at = chrono::Utc::now();
+            }
+        }
+
+        for task in &mut self.tasks {
+            if task.id == current_id {
+                task.sort_order = std::option::Option::Some(prev_order);
+                task.updated_at = chrono::Utc::now();
+            } else if task.id == prev_id {
+                task.sort_order = std::option::Option::Some(current_order);
+                task.updated_at = chrono::Utc::now();
+            }
+        }
+
+        // Save to database
+        if let std::option::Option::Some(ref adapter) = self.db_adapter {
+            for task in &self.prd_view_tasks {
+                if task.id == current_id || task.id == prev_id {
+                    if let std::result::Result::Err(e) = adapter.save_async(task.clone()).await {
+                        return std::result::Result::Err(std::format!("Failed to save task: {}", e));
+                    }
+                }
+            }
+        }
+
+        // Swap tasks in prd_view_tasks to reflect new order
+        self.prd_view_tasks.swap(current_idx, prev_idx);
+
+        // Move selection up to follow the task
+        self.prd_view_selected_task = prev_idx;
+
+        std::result::Result::Ok(())
+    }
+
+    /// Moves the selected task down in PRD view (increases sort_order).
+    async fn move_prd_task_down(&mut self) -> std::result::Result<(), String> {
+        if self.prd_view_tasks.is_empty() || self.prd_view_selected_task >= self.prd_view_tasks.len() - 1 {
+            return std::result::Result::Ok(());
+        }
+
+        let current_idx = self.prd_view_selected_task;
+        let next_idx = current_idx + 1;
+
+        // Get the task IDs and current sort orders
+        let current_task = &self.prd_view_tasks[current_idx];
+        let next_task = &self.prd_view_tasks[next_idx];
+
+        let current_id = current_task.id.clone();
+        let next_id = next_task.id.clone();
+
+        // Calculate new sort orders (swap positions)
+        let current_order = current_task.sort_order.unwrap_or(current_idx as i32 * 1000);
+        let next_order = next_task.sort_order.unwrap_or(next_idx as i32 * 1000);
+
+        // Update tasks in memory (both prd_view_tasks and main tasks list)
+        for task in &mut self.prd_view_tasks {
+            if task.id == current_id {
+                task.sort_order = std::option::Option::Some(next_order);
+                task.updated_at = chrono::Utc::now();
+            } else if task.id == next_id {
+                task.sort_order = std::option::Option::Some(current_order);
+                task.updated_at = chrono::Utc::now();
+            }
+        }
+
+        for task in &mut self.tasks {
+            if task.id == current_id {
+                task.sort_order = std::option::Option::Some(next_order);
+                task.updated_at = chrono::Utc::now();
+            } else if task.id == next_id {
+                task.sort_order = std::option::Option::Some(current_order);
+                task.updated_at = chrono::Utc::now();
+            }
+        }
+
+        // Save to database
+        if let std::option::Option::Some(ref adapter) = self.db_adapter {
+            for task in &self.prd_view_tasks {
+                if task.id == current_id || task.id == next_id {
+                    if let std::result::Result::Err(e) = adapter.save_async(task.clone()).await {
+                        return std::result::Result::Err(std::format!("Failed to save task: {}", e));
+                    }
+                }
+            }
+        }
+
+        // Swap tasks in prd_view_tasks to reflect new order
+        self.prd_view_tasks.swap(current_idx, next_idx);
+
+        // Move selection down to follow the task
+        self.prd_view_selected_task = next_idx;
+
+        std::result::Result::Ok(())
+    }
+
     fn toggle_recent_dialog(&mut self) {
         self.show_recent_dialog = !self.show_recent_dialog;
         if self.show_recent_dialog {
@@ -3683,6 +5415,30 @@ impl App {
                 if self.setup_wizard_fallback_model.is_empty() {
                     self.setup_wizard_fallback_model = String::from(self.setup_wizard_fallback_provider.default_model());
                 }
+                SetupWizardStep::ConfigureEmbeddingSlot
+            }
+            SetupWizardStep::ConfigureEmbeddingSlot => {
+                // Lock in embedding slot provider selection
+                let providers = LLMProvider::all();
+                if self.setup_wizard_embedding_provider_selection < providers.len() {
+                    self.setup_wizard_embedding_provider = providers[self.setup_wizard_embedding_provider_selection];
+                }
+                // Update embedding model to match selected provider's default embedding model
+                if self.setup_wizard_embedding_model.is_empty() {
+                    self.setup_wizard_embedding_model = String::from("nomic-embed-text");
+                }
+                SetupWizardStep::ConfigureVisionSlot
+            }
+            SetupWizardStep::ConfigureVisionSlot => {
+                // Lock in vision slot provider selection
+                let providers = LLMProvider::all();
+                if self.setup_wizard_vision_provider_selection < providers.len() {
+                    self.setup_wizard_vision_provider = providers[self.setup_wizard_vision_provider_selection];
+                }
+                // Update vision model to match selected provider's default vision model
+                if self.setup_wizard_vision_model.is_empty() {
+                    self.setup_wizard_vision_model = String::from("llava:latest");
+                }
                 SetupWizardStep::DatabaseConfiguration
             }
             SetupWizardStep::DatabaseConfiguration => SetupWizardStep::Confirmation,
@@ -3699,7 +5455,9 @@ impl App {
             SetupWizardStep::ConfigureMainSlot => SetupWizardStep::TaskToolSlots,
             SetupWizardStep::ConfigureResearchSlot => SetupWizardStep::ConfigureMainSlot,
             SetupWizardStep::ConfigureFallbackSlot => SetupWizardStep::ConfigureResearchSlot,
-            SetupWizardStep::DatabaseConfiguration => SetupWizardStep::ConfigureFallbackSlot,
+            SetupWizardStep::ConfigureEmbeddingSlot => SetupWizardStep::ConfigureFallbackSlot,
+            SetupWizardStep::ConfigureVisionSlot => SetupWizardStep::ConfigureEmbeddingSlot,
+            SetupWizardStep::DatabaseConfiguration => SetupWizardStep::ConfigureVisionSlot,
             SetupWizardStep::Confirmation => SetupWizardStep::DatabaseConfiguration,
             SetupWizardStep::Complete => SetupWizardStep::Complete,
         };
@@ -3724,6 +5482,16 @@ impl App {
                     self.setup_wizard_fallback_provider_selection += 1;
                 }
             }
+            SetupWizardStep::ConfigureEmbeddingSlot => {
+                if self.setup_wizard_embedding_provider_selection < providers.len() - 1 {
+                    self.setup_wizard_embedding_provider_selection += 1;
+                }
+            }
+            SetupWizardStep::ConfigureVisionSlot => {
+                if self.setup_wizard_vision_provider_selection < providers.len() - 1 {
+                    self.setup_wizard_vision_provider_selection += 1;
+                }
+            }
             _ => {}
         }
     }
@@ -3746,6 +5514,16 @@ impl App {
                     self.setup_wizard_fallback_provider_selection -= 1;
                 }
             }
+            SetupWizardStep::ConfigureEmbeddingSlot => {
+                if self.setup_wizard_embedding_provider_selection > 0 {
+                    self.setup_wizard_embedding_provider_selection -= 1;
+                }
+            }
+            SetupWizardStep::ConfigureVisionSlot => {
+                if self.setup_wizard_vision_provider_selection > 0 {
+                    self.setup_wizard_vision_provider_selection -= 1;
+                }
+            }
             _ => {}
         }
     }
@@ -3761,6 +5539,12 @@ impl App {
             }
             SetupWizardStep::ConfigureFallbackSlot => {
                 self.setup_wizard_fallback_model.push(c);
+            }
+            SetupWizardStep::ConfigureEmbeddingSlot => {
+                self.setup_wizard_embedding_model.push(c);
+            }
+            SetupWizardStep::ConfigureVisionSlot => {
+                self.setup_wizard_vision_model.push(c);
             }
             SetupWizardStep::DatabaseConfiguration => {
                 self.setup_wizard_db_path.push(c);
@@ -3780,6 +5564,12 @@ impl App {
             }
             SetupWizardStep::ConfigureFallbackSlot => {
                 self.setup_wizard_fallback_model.pop();
+            }
+            SetupWizardStep::ConfigureEmbeddingSlot => {
+                self.setup_wizard_embedding_model.pop();
+            }
+            SetupWizardStep::ConfigureVisionSlot => {
+                self.setup_wizard_vision_model.pop();
             }
             SetupWizardStep::DatabaseConfiguration => {
                 self.setup_wizard_db_path.pop();
@@ -3826,6 +5616,20 @@ impl App {
             LLMProvider::Rig => "rig",
         };
 
+        let embedding_provider_name = match self.setup_wizard_embedding_provider {
+            LLMProvider::Ollama => "ollama",
+            LLMProvider::Candle => "candle",
+            LLMProvider::Mistral => "mistral",
+            LLMProvider::Rig => "rig",
+        };
+
+        let vision_provider_name = match self.setup_wizard_vision_provider {
+            LLMProvider::Ollama => "ollama",
+            LLMProvider::Candle => "candle",
+            LLMProvider::Mistral => "mistral",
+            LLMProvider::Rig => "rig",
+        };
+
         let config = serde_json::json!({
             "provider": main_provider_name, // Legacy field - kept for backward compatibility
             "task_tools": {
@@ -3840,12 +5644,22 @@ impl App {
                 "fallback": {
                     "provider": fallback_provider_name,
                     "model": self.setup_wizard_fallback_model.clone()
+                },
+                "embedding": {
+                    "provider": embedding_provider_name,
+                    "model": self.setup_wizard_embedding_model.clone()
+                },
+                "vision": {
+                    "provider": vision_provider_name,
+                    "model": self.setup_wizard_vision_model.clone()
                 }
             },
             "model": {
                 "main": self.setup_wizard_main_model.clone(),
                 "research": self.setup_wizard_research_model.clone(),
-                "fallback": self.setup_wizard_fallback_model.clone()
+                "fallback": self.setup_wizard_fallback_model.clone(),
+                "embedding": self.setup_wizard_embedding_model.clone(),
+                "vision": self.setup_wizard_vision_model.clone()
             },
             "database_url": self.setup_wizard_db_path.clone()
         });
@@ -4016,6 +5830,17 @@ async fn run_app<B: ratatui::backend::Backend>(
     app: &mut App,
 ) -> io::Result<()> {
     loop {
+        // Load initial data on first render (if not in setup wizard)
+        if app.needs_initial_load && !app.setup_wizard_active {
+            app.needs_initial_load = false;
+            // Load all data: projects, PRDs, tasks
+            if let std::result::Result::Err(e) = app.refresh_all_data().await {
+                app.status_message = std::option::Option::Some(
+                    std::format!("Failed to load initial data: {}", e)
+                );
+            }
+        }
+
         terminal.draw(|f| ui(f, app))?;
 
         // Check if PRD processing should advance to next step (after UI has rendered)
@@ -4062,6 +5887,12 @@ async fn run_app<B: ratatui::backend::Backend>(
                                 SetupWizardStep::ConfigureFallbackSlot => {
                                     app.setup_wizard_next_step();
                                 }
+                                SetupWizardStep::ConfigureEmbeddingSlot => {
+                                    app.setup_wizard_next_step();
+                                }
+                                SetupWizardStep::ConfigureVisionSlot => {
+                                    app.setup_wizard_next_step();
+                                }
                                 SetupWizardStep::DatabaseConfiguration => {
                                     app.setup_wizard_next_step();
                                 }
@@ -4098,7 +5929,9 @@ async fn run_app<B: ratatui::backend::Backend>(
                             if matches!(app.setup_wizard_step,
                                 SetupWizardStep::ConfigureMainSlot |
                                 SetupWizardStep::ConfigureResearchSlot |
-                                SetupWizardStep::ConfigureFallbackSlot) {
+                                SetupWizardStep::ConfigureFallbackSlot |
+                                SetupWizardStep::ConfigureEmbeddingSlot |
+                                SetupWizardStep::ConfigureVisionSlot) {
                                 app.setup_wizard_next_provider();
                             }
                         }
@@ -4107,7 +5940,9 @@ async fn run_app<B: ratatui::backend::Backend>(
                             if matches!(app.setup_wizard_step,
                                 SetupWizardStep::ConfigureMainSlot |
                                 SetupWizardStep::ConfigureResearchSlot |
-                                SetupWizardStep::ConfigureFallbackSlot) {
+                                SetupWizardStep::ConfigureFallbackSlot |
+                                SetupWizardStep::ConfigureEmbeddingSlot |
+                                SetupWizardStep::ConfigureVisionSlot) {
                                 app.setup_wizard_previous_provider();
                             }
                         }
@@ -4264,11 +6099,15 @@ async fn run_app<B: ratatui::backend::Backend>(
                                     app.prd_gen_status = PRDGenStatus::Idle;
                                     app.prd_gen_input_active = false;
                                     app.prd_gen_scroll_offset = 0;
+
+                                    // Clear processing tracking data
+                                    app.prd_processing_start_time = std::option::Option::None;
+                                    app.prd_processing_complexity_counts.clear();
                                 }
                             }
                             KeyCode::Esc => {
-                                if matches!(app.prd_processing_state, PRDProcessingState::Failed { .. }) {
-                                    // Close processing view on error
+                                if matches!(app.prd_processing_state, PRDProcessingState::Failed { .. } | PRDProcessingState::Cancelled) {
+                                    // Close processing view on error or cancellation
                                     app.show_prd_processing = false;
 
                                     // Clear interactive generation state
@@ -4278,6 +6117,59 @@ async fn run_app<B: ratatui::backend::Backend>(
                                     app.prd_gen_status = PRDGenStatus::Idle;
                                     app.prd_gen_input_active = false;
                                     app.prd_gen_scroll_offset = 0;
+
+                                    // Clear processing tracking data
+                                    app.prd_processing_start_time = std::option::Option::None;
+                                    app.prd_processing_complexity_counts.clear();
+                                }
+                            }
+                            KeyCode::Char('c') | KeyCode::Char('C') => {
+                                // Request cancellation if processing is in progress (not in terminal state)
+                                let is_active = !matches!(
+                                    app.prd_processing_state,
+                                    PRDProcessingState::Idle
+                                    | PRDProcessingState::Complete { .. }
+                                    | PRDProcessingState::Failed { .. }
+                                    | PRDProcessingState::Cancelled
+                                );
+
+                                if is_active {
+                                    app.prd_processing_cancel_requested = true;
+                                    app.add_notification(
+                                        NotificationLevel::Info,
+                                        String::from("Cancelling PRD processing...")
+                                    );
+                                }
+                            }
+                            KeyCode::Char('r') | KeyCode::Char('R') => {
+                                // Retry failed PRD processing
+                                if matches!(app.prd_processing_state, PRDProcessingState::Failed { .. }) {
+                                    // Reset to initial state to retry from the beginning
+                                    app.prd_processing_state = PRDProcessingState::ReadingFile;
+                                    app.prd_processing_pending = true;
+
+                                    // Clear previous state
+                                    app.prd_processing_content = std::option::Option::None;
+                                    app.prd_processing_prd = std::option::Option::None;
+                                    app.prd_processing_config = std::option::Option::None;
+                                    app.prd_processing_tasks = std::option::Option::None;
+                                    app.prd_processing_artifact_count = 0;
+                                    app.prd_processing_cancel_requested = false;
+                                    app.prd_processing_start_time = std::option::Option::None;
+                                    app.prd_processing_complexity_counts.clear();
+
+                                    // Clear interactive generation state
+                                    app.prd_gen_conversation.clear();
+                                    app.prd_gen_partial_tasks.clear();
+                                    app.prd_gen_input.clear();
+                                    app.prd_gen_status = PRDGenStatus::Idle;
+                                    app.prd_gen_input_active = false;
+                                    app.prd_gen_scroll_offset = 0;
+
+                                    app.add_notification(
+                                        NotificationLevel::Info,
+                                        String::from("Retrying PRD processing...")
+                                    );
                                 }
                             }
                             _ => {}
@@ -4314,6 +6206,8 @@ async fn run_app<B: ratatui::backend::Backend>(
                             }
                         } else if app.show_markdown_browser {
                             app.close_markdown_browser();
+                        } else if app.show_artifact_generator_dialog {
+                            app.close_artifact_generator();
                         } else if app.show_prd_dialog {
                             app.close_prd_dialog();
                         } else if app.show_dev_tools_menu {
@@ -4356,6 +6250,12 @@ async fn run_app<B: ratatui::backend::Backend>(
                             }
                         } else {
                             app.next_tool();
+                            // Load PRD view data if we switched to PRD View
+                            if app.active_tool == DashboardTool::PRDView {
+                                if let std::result::Result::Err(e) = app.load_prd_view_data().await {
+                                    app.add_notification(NotificationLevel::Error, std::format!("Failed to load PRD view: {}", e));
+                                }
+                            }
                         }
                     }
                     KeyCode::BackTab => {
@@ -4365,10 +6265,55 @@ async fn run_app<B: ratatui::backend::Backend>(
                             app.previous_task_editor_field();
                         } else {
                             app.previous_tool();
+                            // Load PRD view data if we switched to PRD View
+                            if app.active_tool == DashboardTool::PRDView {
+                                if let std::result::Result::Err(e) = app.load_prd_view_data().await {
+                                    app.add_notification(NotificationLevel::Error, std::format!("Failed to load PRD view: {}", e));
+                                }
+                            }
+                        }
+                    }
+                    // Spotlight navigation (Up/Down only - k/j/l reserved for text input)
+                    KeyCode::Up if app.show_spotlight_dialog => {
+                        app.previous_spotlight_result();
+                    }
+                    KeyCode::Down if app.show_spotlight_dialog => {
+                        app.next_spotlight_result();
+                    }
+                    // Shift+Down: Reorder tasks (must come BEFORE regular Down handler)
+                    KeyCode::Down if key.modifiers.contains(crossterm::event::KeyModifiers::SHIFT)
+                        && !app.show_notifications
+                        && !app.show_spotlight_dialog
+                        && !app.show_task_creator_dialog
+                        && !app.show_prd_dialog
+                        && !app.show_dev_tools_menu
+                        && !app.show_config_editor
+                        && !app.show_markdown_browser
+                        && app.active_dev_tool.is_none()
+                        && app.active_tool != DashboardTool::DevTools
+                        && !app.show_task_editor_dialog
+                        && !app.show_recent_dialog
+                        && !app.show_sort_menu
+                    => {
+                        if app.active_tool == DashboardTool::PRDView {
+                            // Move task down in PRD view
+                            if let std::result::Result::Err(e) = app.move_prd_task_down().await {
+                                app.add_notification(NotificationLevel::Error, e);
+                            }
+                        } else {
+                            // Move task down in TODO column (Kanban)
+                            if let std::result::Result::Err(e) = app.move_task_down().await {
+                                app.add_notification(NotificationLevel::Error, e);
+                            }
                         }
                     }
                     KeyCode::Down | KeyCode::Char('j') => {
-                        if app.show_spotlight_dialog {
+                        if app.show_notifications {
+                            // Navigate down in notifications
+                            if !app.notifications.is_empty() && app.selected_notification < app.notifications.len() - 1 {
+                                app.selected_notification += 1;
+                            }
+                        } else if app.show_spotlight_dialog {
                             app.next_spotlight_result();
                         } else if app.show_task_creator_dialog {
                             if app.task_creator_field == TaskCreatorField::Status {
@@ -4409,19 +6354,66 @@ async fn run_app<B: ratatui::backend::Backend>(
                         } else if app.show_task_editor_dialog {
                             if app.task_editor_field == TaskEditorField::Status {
                                 app.cycle_task_status_forward();
+                            } else if app.task_editor_field == TaskEditorField::Assignee {
+                                app.cycle_assignee_forward();
                             }
                         } else if app.show_recent_dialog {
                             app.next_recent_item();
                         } else if app.show_sort_menu {
                             app.next_sort_option();
+                        } else if app.active_tool == DashboardTool::ArtifactViewer {
+                            // Navigate down in artifact list
+                            let filtered_count: usize = if let std::option::Option::Some(ref project_id) = app.selected_project_id {
+                                app.artifacts.iter().filter(|a| &a.project_id == project_id).count()
+                            } else {
+                                app.artifacts.len()
+                            };
+                            if filtered_count > 0 && app.selected_artifact < filtered_count - 1 {
+                                app.selected_artifact += 1;
+                            }
+                        } else if app.active_tool == DashboardTool::PRDView {
+                            // Navigate down in PRD View task list
+                            if !app.prd_view_tasks.is_empty() && app.prd_view_selected_task < app.prd_view_tasks.len() - 1 {
+                                app.prd_view_selected_task += 1;
+                            }
                         } else {
                             // Navigate down in the selected Kanban column
                             app.next_task_in_column();
                         }
                     }
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        if app.show_spotlight_dialog {
-                            app.previous_spotlight_result();
+                    // Shift+Up: Reorder tasks (must come BEFORE regular Up handler)
+                    KeyCode::Up if key.modifiers.contains(crossterm::event::KeyModifiers::SHIFT)
+                        && !app.show_notifications
+                        && !app.show_spotlight_dialog
+                        && !app.show_task_creator_dialog
+                        && !app.show_prd_dialog
+                        && !app.show_dev_tools_menu
+                        && !app.show_config_editor
+                        && !app.show_markdown_browser
+                        && app.active_dev_tool.is_none()
+                        && app.active_tool != DashboardTool::DevTools
+                        && !app.show_task_editor_dialog
+                        && !app.show_recent_dialog
+                        && !app.show_sort_menu
+                    => {
+                        if app.active_tool == DashboardTool::PRDView {
+                            // Move task up in PRD view
+                            if let std::result::Result::Err(e) = app.move_prd_task_up().await {
+                                app.add_notification(NotificationLevel::Error, e);
+                            }
+                        } else {
+                            // Move task up in TODO column (Kanban)
+                            if let std::result::Result::Err(e) = app.move_task_up().await {
+                                app.add_notification(NotificationLevel::Error, e);
+                            }
+                        }
+                    }
+                    KeyCode::Up | KeyCode::Char('k') if !app.show_spotlight_dialog => {
+                        if app.show_notifications {
+                            // Navigate up in notifications
+                            if app.selected_notification > 0 {
+                                app.selected_notification -= 1;
+                            }
                         } else if app.show_task_creator_dialog {
                             if app.task_creator_field == TaskCreatorField::Status {
                                 app.cycle_creator_status_backward();
@@ -4459,11 +6451,23 @@ async fn run_app<B: ratatui::backend::Backend>(
                         } else if app.show_task_editor_dialog {
                             if app.task_editor_field == TaskEditorField::Status {
                                 app.cycle_task_status_backward();
+                            } else if app.task_editor_field == TaskEditorField::Assignee {
+                                app.cycle_assignee_backward();
                             }
                         } else if app.show_recent_dialog {
                             app.previous_recent_item();
                         } else if app.show_sort_menu {
                             app.previous_sort_option();
+                        } else if app.active_tool == DashboardTool::ArtifactViewer {
+                            // Navigate up in artifact list
+                            if app.selected_artifact > 0 {
+                                app.selected_artifact -= 1;
+                            }
+                        } else if app.active_tool == DashboardTool::PRDView {
+                            // Navigate up in PRD View task list
+                            if app.prd_view_selected_task > 0 {
+                                app.prd_view_selected_task -= 1;
+                            }
                         } else {
                             // Navigate up in the selected Kanban column
                             app.previous_task_in_column();
@@ -4500,6 +6504,15 @@ async fn run_app<B: ratatui::backend::Backend>(
                         } else if app.show_markdown_browser {
                             // Initiate PRD processing (UI shows immediately, processing starts on next iteration)
                             app.start_prd_processing();
+                        } else if app.show_artifact_generator_dialog {
+                            // Phase 6: Start artifact generation
+                            if !app.artifact_gen_source.is_empty() && !app.artifact_gen_is_generating {
+                                if let std::result::Result::Err(e) = app.start_artifact_generation().await {
+                                    app.status_message = std::option::Option::Some(
+                                        std::format!("Artifact generation error: {}", e)
+                                    );
+                                }
+                            }
                         } else if app.show_dev_tools_menu {
                             // Launch selected dev tool from dialog
                             let selected_tool = match app.dev_tools_selection {
@@ -4604,6 +6617,16 @@ async fn run_app<B: ratatui::backend::Backend>(
                             app.execute_jump();
                         } else if app.show_sort_menu {
                             app.apply_selected_sort();
+                        } else if app.active_tool == DashboardTool::PRDView {
+                            // Open task editor for selected task in PRD view
+                            if !app.prd_view_tasks.is_empty() {
+                                let prd_task = &app.prd_view_tasks[app.prd_view_selected_task];
+                                // Find the task index in the main tasks list
+                                if let std::option::Option::Some(idx) = app.tasks.iter().position(|t| t.id == prd_task.id) {
+                                    app.selected_task = idx;
+                                    app.open_task_editor();
+                                }
+                            }
                         } else {
                             // Open task editor for selected task in column
                             if let std::option::Option::Some(task) = app.get_selected_task_in_column() {
@@ -4617,7 +6640,7 @@ async fn run_app<B: ratatui::backend::Backend>(
                     }
                     KeyCode::Backspace => {
                         if app.show_spotlight_dialog {
-                            app.handle_spotlight_backspace();
+                            app.handle_spotlight_backspace().await;
                         } else if app.show_sql_query_dialog {
                             app.sql_query_input.pop();
                         } else if app.show_config_editor && app.config_editor_editing.is_some() {
@@ -4630,6 +6653,8 @@ async fn run_app<B: ratatui::backend::Backend>(
                             app.handle_task_editor_backspace();
                         } else if app.show_jump_dialog {
                             app.handle_jump_backspace();
+                        } else if app.show_artifact_generator_dialog && !app.artifact_gen_is_generating {
+                            app.artifact_gen_source.pop();
                         } else if app.active_dev_tool == std::option::Option::Some(DevTool::SqliteBrowser) {
                             // Go back to table list from table data view
                             app.db_table_data.clear();
@@ -4641,7 +6666,7 @@ async fn run_app<B: ratatui::backend::Backend>(
                     // so that when dialogs are open, text input is captured instead of triggering hotkeys
                     KeyCode::Char(c) if app.show_spotlight_dialog => {
                         // Handle text input in spotlight search dialog
-                        app.handle_spotlight_input(c);
+                        app.handle_spotlight_input(c).await;
                     }
                     KeyCode::Char(c) if app.show_sql_query_dialog => {
                         // Handle text input in SQL query dialog
@@ -4683,6 +6708,10 @@ async fn run_app<B: ratatui::backend::Backend>(
                         // Handle text input in jump dialog
                         app.handle_jump_input(c);
                     }
+                    KeyCode::Char(c) if app.show_artifact_generator_dialog && !app.artifact_gen_is_generating => {
+                        // Handle text input in artifact generator dialog (Phase 6)
+                        app.artifact_gen_source.push(c);
+                    }
                     KeyCode::Char('q') if app.active_dev_tool == std::option::Option::Some(DevTool::SqliteBrowser) => {
                         // Open SQL query dialog when in SQLite browser
                         app.show_sql_query_dialog = true;
@@ -4717,10 +6746,22 @@ async fn run_app<B: ratatui::backend::Backend>(
                     KeyCode::Char('w') => {
                         // Cycle to previous workspace section
                         app.previous_workspace();
+                        // Reload PRD view if currently viewing it
+                        if app.active_tool == DashboardTool::PRDView {
+                            if let std::result::Result::Err(e) = app.load_prd_view_data().await {
+                                app.add_notification(NotificationLevel::Error, std::format!("Failed to reload PRD view: {}", e));
+                            }
+                        }
                     }
                     KeyCode::Char('e') => {
                         // Cycle to next workspace section
                         app.next_workspace();
+                        // Reload PRD view if currently viewing it
+                        if app.active_tool == DashboardTool::PRDView {
+                            if let std::result::Result::Err(e) = app.load_prd_view_data().await {
+                                app.add_notification(NotificationLevel::Error, std::format!("Failed to reload PRD view: {}", e));
+                            }
+                        }
                     }
                     KeyCode::Char('o') => {
                         // Only show sort menu on Kanban board view
@@ -4734,15 +6775,21 @@ async fn run_app<B: ratatui::backend::Backend>(
                             app.toggle_jump_dialog();
                         }
                     }
+                    KeyCode::Char('G') => {
+                        // Phase 6: Open artifact generator dialog
+                        if !app.show_artifact_generator_dialog && !app.show_sort_menu && !app.show_jump_dialog && !app.show_llm_chat_dialog && !app.show_task_editor_dialog {
+                            app.open_artifact_generator();
+                        }
+                    }
                     KeyCode::Char('l') => {
                         // Phase 5: Open LLM chat dialog
-                        if !app.show_llm_chat_dialog && !app.show_task_editor_dialog && !app.show_jump_dialog {
+                        if !app.show_llm_chat_dialog && !app.show_task_editor_dialog && !app.show_jump_dialog && !app.show_spotlight_dialog {
                             app.open_llm_chat();
                         }
                     }
                     KeyCode::Char('a') => {
-                        // Phase 8: Open task creator dialog
-                        if !app.show_task_creator_dialog && !app.show_llm_chat_dialog && !app.show_task_editor_dialog && !app.show_jump_dialog && !app.show_prd_dialog {
+                        // Open task creator dialog
+                        if !app.show_task_creator_dialog && !app.show_llm_chat_dialog && !app.show_task_editor_dialog && !app.show_jump_dialog && !app.show_prd_dialog && !app.show_config_editor {
                             app.open_task_creator();
                         }
                     }
@@ -4908,6 +6955,8 @@ fn ui(f: &mut Frame, app: &App) {
             DashboardTool::Kanban => render_task_board(f, main_chunks_vertical[1], app),
             DashboardTool::TaskEditor => render_task_editor(f, main_chunks_vertical[1], app),
             DashboardTool::LLMChat => render_llm_chat(f, main_chunks_vertical[1], app),
+            DashboardTool::ArtifactViewer => render_artifact_viewer(f, main_chunks_vertical[1], app),
+            DashboardTool::PRDView => render_prd_view(f, main_chunks_vertical[1], app),
             DashboardTool::Metrics => render_metrics(f, main_chunks_vertical[1], app),
             DashboardTool::DevTools => render_dev_tools_view(f, main_chunks_vertical[1], app),
         }
@@ -4976,6 +7025,11 @@ fn ui(f: &mut Frame, app: &App) {
         render_markdown_browser_dialog(f, app);
     }
 
+    // Render artifact generator dialog if active (Phase 6 TUI Integration)
+    if app.show_artifact_generator_dialog {
+        render_artifact_generator_dialog(f, app);
+    }
+
     // Render task creator dialog if active (Phase 8)
     if app.show_task_creator_dialog {
         render_task_creator_dialog(f, app);
@@ -5012,8 +7066,11 @@ fn render_navigation_panel(f: &mut Frame, area: Rect, app: &App) {
     // Phase 3: Only show Kanban and Metrics as main views
     // TaskEditor and LLMChat will be dialog-only (Phases 4 & 5)
     // Dev Tools opens a menu dialog for development utilities
+    // Artifacts viewer added for RAG knowledge browsing
     let tools = vec![
         DashboardTool::Kanban,
+        DashboardTool::PRDView,
+        DashboardTool::ArtifactViewer,
         DashboardTool::Metrics,
         DashboardTool::DevTools,
     ];
@@ -5025,7 +7082,7 @@ fn render_navigation_panel(f: &mut Frame, area: Rect, app: &App) {
         )),
     ];
 
-    // Render projects list
+    // Render projects list with "All Projects" at top
     if app.projects.is_empty() {
         items.push(Line::from(Span::styled(
             "  No projects yet!",
@@ -5058,6 +7115,18 @@ fn render_navigation_panel(f: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(Color::DarkGray)
         )));
     } else {
+        // "All Projects" option - selected when selected_project_id is None
+        let all_selected = app.selected_project_id.is_none();
+        let all_style = if all_selected {
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        let all_prefix = if all_selected { "▶ " } else { "  " };
+        let all_text = std::format!("{}All Projects ({})", all_prefix, app.tasks.len());
+        items.push(Line::from(Span::styled(all_text, all_style)));
+
+        // Individual projects
         for project in &app.projects {
             let is_selected = app.selected_project_id.as_ref()
                 .map(|id| id == &project.id)
@@ -5071,18 +7140,19 @@ fn render_navigation_panel(f: &mut Frame, area: Rect, app: &App) {
 
             let prefix = if is_selected { "▶ " } else { "  " };
 
-            // Count tasks for this project
-            let task_count = app.get_filtered_tasks().len();
-            let display_text = if is_selected {
-                std::format!("{} ({} tasks)", project.name, task_count)
-            } else {
-                project.name.clone()
-            };
+            // Count tasks for this specific project
+            let task_count = app.tasks.iter()
+                .filter(|t| {
+                    t.source_prd_id.as_ref()
+                        .and_then(|prd_id| app.prds.iter().find(|p| &p.id == prd_id))
+                        .map(|prd| prd.project_id == project.id)
+                        .unwrap_or(false)
+                })
+                .count();
 
-            items.push(Line::from(Span::styled(
-                std::format!("{}{}", prefix, display_text),
-                style
-            )));
+            let display_text = std::format!("{}{} ({})", prefix, truncate_string(&project.name, 14), task_count);
+
+            items.push(Line::from(Span::styled(display_text, style)));
         }
     }
 
@@ -5278,10 +7348,10 @@ fn render_task_editor(f: &mut Frame, area: Rect, app: &App) {
         ]),
     ];
 
-    if let std::option::Option::Some(ref assignee) = task.assignee {
+    if let std::option::Option::Some(ref agent_persona) = task.agent_persona {
         lines.push(Line::from(vec![
             Span::styled("Assignee: ", Style::default().fg(Color::Cyan)),
-            Span::raw(assignee),
+            Span::raw(agent_persona),
         ]));
     }
 
@@ -5383,7 +7453,472 @@ fn render_metrics(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(metrics_widget, area);
 }
 
+/// Renders the Artifact Viewer displaying RAG knowledge artifacts.
+///
+/// Shows list of artifacts for the current project with details panel.
+/// Supports Up/Down navigation and displays linked tasks.
+fn render_artifact_viewer(f: &mut Frame, area: Rect, app: &App) {
+    // Filter artifacts by current project
+    let filtered_artifacts: std::vec::Vec<&task_manager::domain::artifact::Artifact> = if let std::option::Option::Some(ref project_id) = app.selected_project_id {
+        app.artifacts.iter().filter(|a| &a.project_id == project_id).collect()
+    } else {
+        app.artifacts.iter().collect()
+    };
+
+    // Split into list (left) and detail (right) panels
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .split(area);
+
+    // Render artifact list
+    let mut list_items: std::vec::Vec<ListItem> = std::vec::Vec::new();
+    for (idx, artifact) in filtered_artifacts.iter().enumerate() {
+        let source_type_str = std::format!("{:?}", artifact.source_type);
+        let preview = truncate_string(&artifact.content, 60);
+
+        let style = if idx == app.selected_artifact {
+            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+
+        let prefix = if idx == app.selected_artifact { "▶ " } else { "  " };
+
+        list_items.push(ListItem::new(std::vec![
+            Line::from(vec![
+                Span::styled(prefix, style),
+                Span::styled(std::format!("[{}]", source_type_str), Style::default().fg(Color::Cyan)),
+                Span::raw(" "),
+                Span::styled(preview, style),
+            ])
+        ]));
+    }
+
+    let list_title = if filtered_artifacts.is_empty() {
+        std::format!("📚 Artifacts (0)")
+    } else {
+        std::format!("📚 Artifacts ({} total)", filtered_artifacts.len())
+    };
+
+    let artifact_list = List::new(list_items)
+        .block(Block::default()
+            .borders(Borders::ALL)
+            .title(list_title)
+            .border_style(Style::default().fg(Color::Cyan)))
+        .style(Style::default().fg(Color::White));
+
+    f.render_widget(artifact_list, chunks[0]);
+
+    // Render detail panel for selected artifact
+    if let std::option::Option::Some(artifact) = filtered_artifacts.get(app.selected_artifact) {
+        let created_at = artifact.created_at.format("%Y-%m-%d %H:%M UTC").to_string();
+        let source_type = std::format!("{:?}", artifact.source_type);
+
+        let mut detail_lines = std::vec![
+            Line::from(Span::styled("ARTIFACT DETAILS", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Type: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(source_type, Style::default().fg(Color::Cyan)),
+            ]),
+            Line::from(vec![
+                Span::styled("Source ID: ", Style::default().fg(Color::DarkGray)),
+                Span::raw(&artifact.source_id),
+            ]),
+            Line::from(vec![
+                Span::styled("Created: ", Style::default().fg(Color::DarkGray)),
+                Span::raw(created_at),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled("Content:", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))),
+            Line::from(""),
+        ];
+
+        // Word-wrap content at 70 chars
+        let content_lines: std::vec::Vec<&str> = artifact.content.lines().collect();
+        for line in content_lines {
+            if line.len() > 70 {
+                let mut remaining = line;
+                while !remaining.is_empty() {
+                    let split_point = remaining.char_indices()
+                        .nth(70)
+                        .map(|(idx, _)| idx)
+                        .unwrap_or(remaining.len());
+                    let (chunk, rest) = remaining.split_at(split_point);
+                    detail_lines.push(Line::from(chunk));
+                    remaining = rest;
+                }
+            } else {
+                detail_lines.push(Line::from(line));
+            }
+        }
+
+        // Show metadata if present
+        if let std::option::Option::Some(ref metadata) = artifact.metadata {
+            detail_lines.push(Line::from(""));
+            detail_lines.push(Line::from(Span::styled("Metadata:", Style::default().fg(Color::Yellow))));
+            detail_lines.push(Line::from(metadata.as_str()));
+        }
+
+        // Show linked tasks (tasks from the same source PRD)
+        let linked_tasks: std::vec::Vec<&task_manager::domain::task::Task> = if artifact.source_type == task_manager::domain::artifact::ArtifactType::PRD {
+            app.tasks.iter()
+                .filter(|t| t.source_prd_id.as_ref().map(|id| id == &artifact.source_id).unwrap_or(false))
+                .collect()
+        } else {
+            std::vec::Vec::new()
+        };
+
+        if !linked_tasks.is_empty() {
+            detail_lines.push(Line::from(""));
+            detail_lines.push(Line::from(Span::styled(
+                std::format!("Linked Tasks ({}):", linked_tasks.len()),
+                Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)
+            )));
+            for task in linked_tasks.iter().take(5) {
+                let status_icon = match task.status {
+                    task_manager::domain::task_status::TaskStatus::Todo => "📋",
+                    task_manager::domain::task_status::TaskStatus::InProgress => "🔄",
+                    task_manager::domain::task_status::TaskStatus::Completed => "✓",
+                    task_manager::domain::task_status::TaskStatus::Archived => "📦",
+                    task_manager::domain::task_status::TaskStatus::Errored => "❌",
+                    task_manager::domain::task_status::TaskStatus::PendingEnhancement => "⏳",
+                    task_manager::domain::task_status::TaskStatus::PendingComprehensionTest => "🧪",
+                    task_manager::domain::task_status::TaskStatus::PendingFollowOn => "➡️",
+                    task_manager::domain::task_status::TaskStatus::PendingDecomposition => "🔍",
+                    task_manager::domain::task_status::TaskStatus::Decomposed => "🌳",
+                    task_manager::domain::task_status::TaskStatus::OrchestrationComplete => "🎯",
+                };
+                let task_line = std::format!("  {} {}", status_icon, task.title);
+                detail_lines.push(Line::from(task_line));
+            }
+            if linked_tasks.len() > 5 {
+                detail_lines.push(Line::from(Span::styled(
+                    std::format!("  ... and {} more", linked_tasks.len() - 5),
+                    Style::default().fg(Color::DarkGray)
+                )));
+            }
+        }
+
+        detail_lines.push(Line::from(""));
+        detail_lines.push(Line::from(Span::styled("Navigation: ↑/↓ to select", Style::default().fg(Color::DarkGray))));
+
+        let detail_widget = Paragraph::new(detail_lines)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("Detail View")
+                .border_style(Style::default().fg(Color::Green)))
+            .wrap(Wrap { trim: true });
+
+        f.render_widget(detail_widget, chunks[1]);
+    } else {
+        // No artifacts - show empty state
+        let empty_lines = std::vec![
+            Line::from(""),
+            Line::from(Span::styled("No Artifacts Found", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD))),
+            Line::from(""),
+            Line::from("Artifacts are knowledge chunks extracted from:"),
+            Line::from("  • PRDs (via 'rig parse')"),
+            Line::from("  • Files and directories (via 'G' key)"),
+            Line::from("  • Web research"),
+            Line::from(""),
+            Line::from("To generate artifacts:"),
+            Line::from("  1. Press 'G' to open artifact generator"),
+            Line::from("  2. Enter a directory path or URL"),
+            Line::from("  3. Artifacts will be chunked and embedded"),
+        ];
+
+        let empty_widget = Paragraph::new(empty_lines)
+            .block(Block::default()
+                .borders(Borders::ALL)
+                .title("Detail View")
+                .border_style(Style::default().fg(Color::DarkGray)))
+            .style(Style::default().fg(Color::DarkGray));
+
+        f.render_widget(empty_widget, chunks[1]);
+    }
+}
+
+/// Renders the PRD View - unified task list for selected PRD.
+///
+/// Displays all tasks for the selected PRD as a scrollable document with status-colored borders.
+/// Each task appears as a card with title, description, and metadata.
+fn render_prd_view(f: &mut Frame, area: Rect, app: &App) {
+    use ratatui::layout::{Constraint, Layout};
+    use ratatui::widgets::{Block, Borders, BorderType, Paragraph, Wrap};
+
+    // Split area into header, content, and footer
+    let chunks = Layout::default()
+        .direction(ratatui::layout::Direction::Vertical)
+        .constraints([
+            Constraint::Length(3), // Header
+            Constraint::Min(0),     // Content
+            Constraint::Length(1),  // Footer
+        ])
+        .split(area);
+
+    // Render header with PRD title and task count
+    let header_text = if let std::option::Option::Some(prd) = &app.prd_view_current_prd {
+        std::format!("📄 PRD View: {} ({} tasks)", prd.title, app.prd_view_tasks.len())
+    } else {
+        String::from("📄 PRD View: No PRD Selected")
+    };
+
+    let header = Paragraph::new(header_text)
+        .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+        .block(Block::default().borders(Borders::BOTTOM));
+    f.render_widget(header, chunks[0]);
+
+    // Handle empty state
+    if app.prd_view_tasks.is_empty() {
+        let empty_text = if app.prds.is_empty() {
+            "No PRDs found. Create a PRD first by parsing a PRD file (press 'P')."
+        } else if app.prd_view_current_prd.is_none() {
+            "No PRD selected. Press 'p' to select a PRD."
+        } else {
+            "No tasks found for this PRD. Tasks will appear here once generated."
+        };
+
+        let empty_msg = Paragraph::new(empty_text)
+            .style(Style::default().fg(Color::DarkGray))
+            .wrap(Wrap { trim: true })
+            .block(Block::default().borders(Borders::NONE));
+        f.render_widget(empty_msg, chunks[1]);
+
+        let help_text = "↑↓: Navigate | Enter: Edit | Shift+↑↓: Reorder | Esc: Back";
+        let help = Paragraph::new(help_text)
+            .style(Style::default().fg(Color::DarkGray))
+            .alignment(ratatui::layout::Alignment::Center);
+        f.render_widget(help, chunks[2]);
+        return;
+    }
+
+    // Calculate which tasks to display (simple viewport scrolling)
+    let content_height = chunks[1].height as usize;
+    let task_height = 10; // Approximate height per task card (increased to show metadata)
+    let visible_task_count = (content_height / task_height).max(1);
+
+    // Calculate scroll offset to keep selected task in view
+    let scroll_offset = if app.prd_view_selected_task < visible_task_count / 2 {
+        0 // Near top - start from beginning
+    } else if app.prd_view_selected_task >= app.prd_view_tasks.len().saturating_sub(visible_task_count / 2) {
+        // Near bottom - show last page
+        app.prd_view_tasks.len().saturating_sub(visible_task_count)
+    } else {
+        // Middle - center the selected task
+        app.prd_view_selected_task.saturating_sub(visible_task_count / 2)
+    };
+
+    let visible_end = (scroll_offset + visible_task_count).min(app.prd_view_tasks.len());
+
+    // Render visible tasks
+    let mut y_offset = chunks[1].y;
+    let available_height = chunks[1].height;
+
+    for idx in scroll_offset..visible_end {
+        if y_offset >= chunks[1].y + available_height {
+            break;
+        }
+
+        let task = &app.prd_view_tasks[idx];
+        let is_selected = idx == app.prd_view_selected_task;
+
+        // Determine border color and type based on task status
+        let border_color = match task.status {
+            task_manager::domain::task_status::TaskStatus::Todo => Color::Blue,
+            task_manager::domain::task_status::TaskStatus::InProgress => Color::Yellow,
+            task_manager::domain::task_status::TaskStatus::Completed => Color::Green,
+            task_manager::domain::task_status::TaskStatus::Errored => Color::Red,
+            task_manager::domain::task_status::TaskStatus::PendingEnhancement => Color::Cyan,
+            task_manager::domain::task_status::TaskStatus::PendingComprehensionTest => Color::Cyan,
+            task_manager::domain::task_status::TaskStatus::PendingFollowOn => Color::Cyan,
+            task_manager::domain::task_status::TaskStatus::PendingDecomposition => Color::Magenta,
+            task_manager::domain::task_status::TaskStatus::Decomposed => Color::LightBlue,
+            task_manager::domain::task_status::TaskStatus::OrchestrationComplete => Color::LightGreen,
+            task_manager::domain::task_status::TaskStatus::Archived => Color::DarkGray,
+        };
+
+        // Format status text
+        let status_text = match task.status {
+            task_manager::domain::task_status::TaskStatus::Todo => "TODO",
+            task_manager::domain::task_status::TaskStatus::InProgress => "IN PROGRESS",
+            task_manager::domain::task_status::TaskStatus::Completed => "COMPLETED",
+            task_manager::domain::task_status::TaskStatus::Errored => "ERRORED",
+            task_manager::domain::task_status::TaskStatus::PendingEnhancement => "PENDING ENHANCEMENT",
+            task_manager::domain::task_status::TaskStatus::PendingComprehensionTest => "PENDING TEST",
+            task_manager::domain::task_status::TaskStatus::PendingFollowOn => "PENDING FOLLOW-ON",
+            task_manager::domain::task_status::TaskStatus::PendingDecomposition => "PENDING DECOMPOSITION",
+            task_manager::domain::task_status::TaskStatus::Decomposed => "DECOMPOSED",
+            task_manager::domain::task_status::TaskStatus::OrchestrationComplete => "ORCHESTRATION COMPLETE",
+            task_manager::domain::task_status::TaskStatus::Archived => "ARCHIVED",
+        };
+
+        // Light background colors for selected tasks (based on status)
+        // Using standard terminal colors for better compatibility
+        let light_bg_color = match task.status {
+            task_manager::domain::task_status::TaskStatus::Todo => Color::Cyan,
+            task_manager::domain::task_status::TaskStatus::InProgress => Color::Yellow,
+            task_manager::domain::task_status::TaskStatus::Completed => Color::Green,
+            task_manager::domain::task_status::TaskStatus::Errored => Color::Red,
+            task_manager::domain::task_status::TaskStatus::PendingEnhancement => Color::LightCyan,
+            task_manager::domain::task_status::TaskStatus::PendingComprehensionTest => Color::LightCyan,
+            task_manager::domain::task_status::TaskStatus::PendingFollowOn => Color::LightCyan,
+            task_manager::domain::task_status::TaskStatus::PendingDecomposition => Color::Magenta,
+            task_manager::domain::task_status::TaskStatus::Decomposed => Color::LightBlue,
+            task_manager::domain::task_status::TaskStatus::OrchestrationComplete => Color::LightGreen,
+            task_manager::domain::task_status::TaskStatus::Archived => Color::Gray,
+        };
+
+        // Border type: Rounded for selected, Plain for others
+        let border_type = if is_selected {
+            BorderType::Rounded
+        } else {
+            BorderType::Plain
+        };
+
+        // Border style: keep status color
+        let border_style = Style::default().fg(border_color);
+
+        // Content style: light background + black text for selected, default for others
+        let content_style = if is_selected {
+            Style::default().bg(light_bg_color).fg(Color::Black)
+        } else {
+            Style::default()
+        };
+
+        // Build task card content
+        let mut task_lines = std::vec::Vec::new();
+
+        // Selection indicator + Title with status
+        let mut title_spans = std::vec::Vec::new();
+        if is_selected {
+            title_spans.push(Span::styled("▶ ", Style::default().bg(light_bg_color).fg(Color::Black).add_modifier(Modifier::BOLD)));
+        }
+        title_spans.push(Span::styled(
+            task.title.clone(),
+            Style::default().bg(if is_selected { light_bg_color } else { Color::Reset }).fg(if is_selected { Color::Black } else { Color::White }).add_modifier(Modifier::BOLD)
+        ));
+        title_spans.push(Span::raw(" "));
+        title_spans.push(Span::styled(
+            std::format!("[{}]", status_text),
+            Style::default().bg(if is_selected { light_bg_color } else { Color::Reset }).fg(if is_selected { Color::Black } else { border_color }).add_modifier(Modifier::BOLD)
+        ));
+
+        task_lines.push(Line::from(title_spans));
+
+        // Empty line with background for selected
+        if is_selected {
+            task_lines.push(Line::from(Span::styled(" ", Style::default().bg(light_bg_color))));
+        } else {
+            task_lines.push(Line::from(""));
+        }
+
+        // Description (with wrapping and background for selected)
+        if !task.description.is_empty() {
+            let desc_line = if is_selected {
+                Line::from(Span::styled(task.description.clone(), Style::default().bg(light_bg_color).fg(Color::Black)))
+            } else {
+                Line::from(task.description.clone())
+            };
+            task_lines.push(desc_line);
+
+            // Empty line with background for selected
+            if is_selected {
+                task_lines.push(Line::from(Span::styled(" ", Style::default().bg(light_bg_color))));
+            } else {
+                task_lines.push(Line::from(""));
+            }
+        }
+
+        // Metadata footer - always show all fields
+        let mut metadata_spans = std::vec::Vec::new();
+
+        // Assignee (always show, even if unassigned)
+        let assignee_text = task.agent_persona.as_ref().map(|s| s.as_str()).unwrap_or("Unassigned");
+        metadata_spans.push(Span::styled("👤 ", Style::default().bg(if is_selected { light_bg_color } else { Color::Reset }).fg(if is_selected { Color::Black } else { Color::DarkGray })));
+        metadata_spans.push(Span::styled(assignee_text, Style::default().bg(if is_selected { light_bg_color } else { Color::Reset }).fg(if is_selected { Color::Black } else { Color::Cyan })));
+        metadata_spans.push(Span::styled("  ", Style::default().bg(if is_selected { light_bg_color } else { Color::Reset })));
+
+        // Complexity (always show, even if not set)
+        let complexity_text = task.complexity.map(|c| std::format!("{}", c)).unwrap_or_else(|| "?".to_string());
+        metadata_spans.push(Span::styled("🎯 ", Style::default().bg(if is_selected { light_bg_color } else { Color::Reset }).fg(if is_selected { Color::Black } else { Color::DarkGray })));
+        metadata_spans.push(Span::styled(
+            std::format!("Complexity: {}", complexity_text),
+            Style::default().bg(if is_selected { light_bg_color } else { Color::Reset }).fg(if is_selected { Color::Black } else { Color::Yellow })
+        ));
+        metadata_spans.push(Span::styled("  ", Style::default().bg(if is_selected { light_bg_color } else { Color::Reset })));
+
+        // Artifact count (always show, even if 0)
+        let artifact_count = task.context_files.len();
+        metadata_spans.push(Span::styled("📎 ", Style::default().bg(if is_selected { light_bg_color } else { Color::Reset }).fg(if is_selected { Color::Black } else { Color::DarkGray })));
+        metadata_spans.push(Span::styled(
+            std::format!("Artifacts: {}", artifact_count),
+            Style::default().bg(if is_selected { light_bg_color } else { Color::Reset }).fg(if is_selected { Color::Black } else { Color::Magenta })
+        ));
+        metadata_spans.push(Span::styled("  ", Style::default().bg(if is_selected { light_bg_color } else { Color::Reset })));
+
+        // Position in list (much cleaner than raw sort_order)
+        metadata_spans.push(Span::styled("#", Style::default().bg(if is_selected { light_bg_color } else { Color::Reset }).fg(if is_selected { Color::Black } else { Color::DarkGray })));
+        metadata_spans.push(Span::styled(
+            std::format!("{}", idx + 1),
+            Style::default().bg(if is_selected { light_bg_color } else { Color::Reset }).fg(if is_selected { Color::Black } else { Color::Gray })
+        ));
+
+        // Always add metadata line (even if empty, to maintain consistent spacing)
+        task_lines.push(Line::from(metadata_spans));
+
+        // Create task block with colored border and padding
+        // Apply background color to both block and paragraph for full area fill
+        let task_block = Block::default()
+            .borders(Borders::ALL)
+            .border_type(border_type)
+            .border_style(border_style)
+            .padding(ratatui::widgets::Padding::uniform(1))
+            .style(if is_selected {
+                Style::default().bg(light_bg_color)
+            } else {
+                Style::default()
+            });
+
+        let task_widget = Paragraph::new(task_lines)
+            .block(task_block)
+            .wrap(Wrap { trim: true })
+            .style(if is_selected {
+                Style::default().bg(light_bg_color)
+            } else {
+                Style::default()
+            });
+
+        // Calculate task area
+        let remaining_height = (chunks[1].y + available_height).saturating_sub(y_offset);
+        let task_area = Rect {
+            x: chunks[1].x,
+            y: y_offset,
+            width: chunks[1].width,
+            height: (task_height as u16).min(remaining_height),
+        };
+
+        f.render_widget(task_widget, task_area);
+        y_offset += task_height as u16;
+    }
+
+    // Render help footer
+    let scroll_indicator = std::format!(
+        "Task {}/{} | ↑↓: Navigate | Enter: Edit | Shift+↑↓: Reorder | Esc: Back",
+        app.prd_view_selected_task + 1,
+        app.prd_view_tasks.len()
+    );
+    let help = Paragraph::new(scroll_indicator)
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(ratatui::layout::Alignment::Center);
+    f.render_widget(help, chunks[2]);
+}
+
 /// Renders the SQLite database browser dev tool.
+///
+/// Displays a list of database tables with basic navigation.
+
 ///
 /// Displays a list of database tables with basic navigation.
 /// Press Esc to close and return to previous view.
@@ -5496,11 +8031,7 @@ fn render_sqlite_browser(f: &mut Frame, area: Rect, app: &App) {
             if !app.db_table_columns.is_empty() {
                 let header_line = app.db_table_columns.iter()
                     .map(|col| {
-                        let truncated = if col.len() > 15 {
-                            std::format!("{}...", &col[..12])
-                        } else {
-                            col.clone()
-                        };
+                        let truncated = truncate_string(col, 15);
                         std::format!("{:15}", truncated)
                     })
                     .collect::<std::vec::Vec<_>>()
@@ -5518,11 +8049,7 @@ fn render_sqlite_browser(f: &mut Frame, area: Rect, app: &App) {
                 let mut row_values = std::vec::Vec::new();
                 for col_name in &app.db_table_columns {
                     let value = row.get(col_name).cloned().unwrap_or_else(|| String::from("-"));
-                    let truncated = if value.len() > 15 {
-                        std::format!("{}...", &value[..12])
-                    } else {
-                        value
-                    };
+                    let truncated = truncate_string(&value, 15);
                     row_values.push(std::format!("{:15}", truncated));
                 }
 
@@ -5813,11 +8340,7 @@ fn render_sql_query_dialog(f: &mut Frame, app: &App) {
         if !app.sql_query_columns.is_empty() {
             let header_line = app.sql_query_columns.iter()
                 .map(|col| {
-                    let truncated = if col.len() > 15 {
-                        std::format!("{}...", &col[..12])
-                    } else {
-                        col.clone()
-                    };
+                    let truncated = truncate_string(col, 15);
                     std::format!("{:15}", truncated)
                 })
                 .collect::<std::vec::Vec<_>>()
@@ -5835,11 +8358,7 @@ fn render_sql_query_dialog(f: &mut Frame, app: &App) {
             let mut row_values = std::vec::Vec::new();
             for col_name in &app.sql_query_columns {
                 let value = row.get(col_name).cloned().unwrap_or_else(|| String::from("-"));
-                let truncated = if value.len() > 15 {
-                    std::format!("{}...", &value[..12])
-                } else {
-                    value
-                };
+                let truncated = truncate_string(&value, 15);
                 row_values.push(std::format!("{:15}", truncated));
             }
             lines.push(Line::from(Span::raw(row_values.join(" │ "))));
@@ -6116,6 +8635,115 @@ fn render_markdown_browser_dialog(f: &mut Frame, app: &App) {
     f.render_widget(paragraph, dialog);
 }
 
+/// Renders the artifact generator dialog (Phase 6 TUI Integration).
+///
+/// Displays a dialog for entering a source path or URL to generate artifacts from.
+/// Supports directory paths (for file scanning) or URLs (for web crawling).
+///
+/// Revision History
+/// - 2025-11-30T19:30:00Z @AI: Initial implementation for Phase 6 TUI artifact generation.
+fn render_artifact_generator_dialog(f: &mut Frame, app: &App) {
+    // Calculate dialog size
+    let area_rect = f.area();
+    let dialog_width = std::cmp::min(70, area_rect.width.saturating_sub(10));
+    let dialog_height = std::cmp::min(20, area_rect.height.saturating_sub(4));
+    let dialog = Rect {
+        x: (area_rect.width.saturating_sub(dialog_width)) / 2,
+        y: (area_rect.height.saturating_sub(dialog_height)) / 2,
+        width: dialog_width,
+        height: dialog_height,
+    };
+
+    // Build content lines
+    let mut lines = std::vec![
+        Line::from(Span::styled(
+            " 🔍 Generate Knowledge Artifacts ",
+            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD)
+        )),
+        Line::from(""),
+    ];
+
+    // Show explanation
+    lines.push(Line::from(Span::styled(
+        "Enter a directory path or URL to scan for knowledge artifacts.",
+        Style::default().fg(Color::DarkGray)
+    )));
+    lines.push(Line::from(Span::styled(
+        "Artifacts are used for RAG-enhanced task generation.",
+        Style::default().fg(Color::DarkGray)
+    )));
+    lines.push(Line::from(""));
+
+    // Show source input
+    lines.push(Line::from(vec![
+        Span::styled("Source: ", Style::default().fg(Color::Yellow)),
+        Span::styled(&app.artifact_gen_source, Style::default().fg(Color::Cyan)),
+        Span::styled("_", Style::default().fg(Color::Cyan).add_modifier(Modifier::SLOW_BLINK)),
+    ]));
+    lines.push(Line::from(""));
+
+    // Show examples
+    lines.push(Line::from(Span::styled(
+        "Examples:",
+        Style::default().fg(Color::DarkGray)
+    )));
+    lines.push(Line::from(Span::styled(
+        "  ./src           - Scan source directory",
+        Style::default().fg(Color::DarkGray)
+    )));
+    lines.push(Line::from(Span::styled(
+        "  https://docs.rs - Crawl documentation site",
+        Style::default().fg(Color::DarkGray)
+    )));
+    lines.push(Line::from(""));
+
+    // Show progress if generating
+    if app.artifact_gen_is_generating {
+        lines.push(Line::from(vec![
+            Span::styled("⏳ ", Style::default().fg(Color::Yellow)),
+            Span::styled(&app.artifact_gen_progress, Style::default().fg(Color::Yellow)),
+        ]));
+    } else if let std::option::Option::Some(ref error) = app.artifact_gen_error {
+        lines.push(Line::from(Span::styled(
+            std::format!("❌ Error: {}", error),
+            Style::default().fg(Color::Red)
+        )));
+    }
+
+    lines.push(Line::from(""));
+
+    // Show keyboard shortcuts
+    if app.artifact_gen_is_generating {
+        lines.push(Line::from(vec![
+            Span::styled("Esc", Style::default().fg(Color::Red)),
+            Span::raw(" Cancel"),
+        ]));
+    } else {
+        lines.push(Line::from(vec![
+            Span::styled("Enter", Style::default().fg(Color::Green)),
+            Span::raw(" Generate  "),
+            Span::styled("Esc", Style::default().fg(Color::Red)),
+            Span::raw(" Close"),
+        ]));
+    }
+
+    // Clear the dialog area first to prevent backdrop from showing through
+    f.render_widget(ratatui::widgets::Clear, dialog);
+
+    // Render the dialog
+    let paragraph = Paragraph::new(lines)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Magenta))
+                .style(Style::default().bg(Color::Black))
+        )
+        .style(Style::default().bg(Color::Black))
+        .wrap(Wrap { trim: false });
+
+    f.render_widget(paragraph, dialog);
+}
+
 /// Renders the right details panel showing context-aware information.
 fn render_details_panel(f: &mut Frame, area: Rect, app: &App) {
     let mut lines = std::vec![
@@ -6123,10 +8751,28 @@ fn render_details_panel(f: &mut Frame, area: Rect, app: &App) {
         Line::from(""),
     ];
 
-    // Get the task selected in the current Kanban column (not global index)
-    let selected_task_option = app.get_selected_task_in_column();
+    // Get the selected task based on current tool
+    // Note: We need to handle both borrowed and owned task types
+    let prd_view_task = if app.active_tool == DashboardTool::PRDView {
+        if !app.prd_view_tasks.is_empty() && app.prd_view_selected_task < app.prd_view_tasks.len() {
+            std::option::Option::Some(&app.prd_view_tasks[app.prd_view_selected_task])
+        } else {
+            std::option::Option::None
+        }
+    } else {
+        std::option::Option::None
+    };
 
-    if let std::option::Option::Some(task) = selected_task_option {
+    let kanban_task = if app.active_tool != DashboardTool::PRDView {
+        app.get_selected_task_in_column()
+    } else {
+        std::option::Option::None
+    };
+
+    // Use PRD view task if available, otherwise use Kanban task
+    let selected_task_ref = prd_view_task.or_else(|| kanban_task.as_ref());
+
+    if let std::option::Option::Some(task) = selected_task_ref {
 
         lines.push(Line::from(Span::styled("Selected Task:", Style::default().fg(Color::Yellow))));
         lines.push(Line::from(truncate_string(&task.title, 25)));
@@ -6135,8 +8781,8 @@ fn render_details_panel(f: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(Span::styled("Quick Info:", Style::default().fg(Color::Cyan))));
         lines.push(Line::from(std::format!("Status: {}", format_status_text(&task.status))));
 
-        if let std::option::Option::Some(ref assignee) = task.assignee {
-            lines.push(Line::from(std::format!("Assignee: {}", assignee)));
+        if let std::option::Option::Some(ref agent_persona) = task.agent_persona {
+            lines.push(Line::from(std::format!("Assignee: {}", agent_persona)));
         }
 
         if let std::option::Option::Some(complexity) = task.complexity {
@@ -6215,7 +8861,11 @@ fn get_status_color(status: &task_manager::domain::task_status::TaskStatus) -> C
     }
 }
 
-/// Renders the Task Board (Kanban view).
+/// Renders the Task Board (Kanban view) with tasks grouped by project within each column.
+///
+/// Layout: 4 status columns (TODO, IN PROGRESS, COMPLETED, ARCHIVED/ERRORED).
+/// Within each column, tasks are grouped under project headers.
+/// Task cards show: title, agent_persona, and complexity score.
 fn render_task_board(f: &mut Frame, area: Rect, app: &App) {
     // Split area into filter bar and task columns
     let chunks = Layout::default()
@@ -6229,13 +8879,19 @@ fn render_task_board(f: &mut Frame, area: Rect, app: &App) {
     // Render filter bar
     render_filter_bar(f, chunks[0], app);
 
+    // Get filtered tasks based on selected project
+    let filtered_tasks: std::vec::Vec<task_manager::domain::task::Task> = app.get_filtered_tasks()
+        .into_iter()
+        .cloned()
+        .collect();
+
     // Show helpful message if no tasks exist
-    if app.tasks.is_empty() {
+    if filtered_tasks.is_empty() {
         let help_text = vec![
             Line::from(""),
             Line::from(""),
             Line::from(Span::styled(
-                "📋 No tasks found",
+                "No tasks found",
                 Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
             )),
             Line::from(""),
@@ -6282,23 +8938,8 @@ fn render_task_board(f: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    // Group tasks by status (applying active filter)
-    let mut todo_tasks = std::vec::Vec::new();
-    let mut in_progress_tasks = std::vec::Vec::new();
-    let mut completed_tasks = std::vec::Vec::new();
-    let mut archived_tasks = std::vec::Vec::new();
-    let mut errored_tasks = std::vec::Vec::new();
-
-    for task in &app.tasks {
-        match task.status {
-            task_manager::domain::task_status::TaskStatus::Todo => todo_tasks.push(task),
-            task_manager::domain::task_status::TaskStatus::InProgress => in_progress_tasks.push(task),
-            task_manager::domain::task_status::TaskStatus::Completed => completed_tasks.push(task),
-            task_manager::domain::task_status::TaskStatus::Archived => archived_tasks.push(task),
-            task_manager::domain::task_status::TaskStatus::Errored => errored_tasks.push(task),
-            _ => {}
-        }
-    }
+    // Group tasks by project
+    let project_groups = group_tasks_by_project(&filtered_tasks, &app.prds, &app.projects);
 
     // Create four columns
     let columns = Layout::default()
@@ -6311,318 +8952,202 @@ fn render_task_board(f: &mut Frame, area: Rect, app: &App) {
         ])
         .split(chunks[1]);
 
-    // Render TODO column
+    // Render TODO column with project grouping
     let is_todo_selected = app.selected_column == KanbanColumn::Todo;
+    render_project_grouped_column(
+        f, columns[0], &project_groups, |g| &g.todo,
+        "TODO", Color::Blue, is_todo_selected,
+        app.selected_project_row, app.selected_task_in_column
+    );
 
-    // Build hierarchical task list (parents with indented children)
-    let hierarchical_todo = build_hierarchical_task_list(&todo_tasks);
-
-    let todo_items: std::vec::Vec<ListItem> = hierarchical_todo
-        .iter()
-        .enumerate()
-        .map(|(i, htask)| {
-            let age_days = calculate_task_age_days(htask.task);
-            let (age_icon, age_color) = get_age_indicator(age_days);
-
-            // Highlight selected task in selected column
-            let is_selected = is_todo_selected && i == app.selected_task_in_column;
-
-            // Create card-style with border separators
-            let card_top = if is_selected {
-                "┏━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            } else {
-                "┌─────────────────────────"
-            };
-
-            let card_bottom = if is_selected {
-                "┗━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            } else {
-                "└─────────────────────────"
-            };
-
-            let title_style = if is_selected {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(age_color)
-            };
-
-            let border_style = if is_selected {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
-
-            // Get tree indicator for hierarchical display
-            let tree_prefix = get_tree_indicator(htask.depth, htask.is_last_child);
-
-            // Calculate available width: 22 total - tree_prefix length - age_icon length
-            let available_width = 22 - tree_prefix.chars().count() - age_icon.chars().count();
-
-            // Create multi-line card with tree indicator
-            let title_text = std::format!("│ {}{}{}", tree_prefix, age_icon, truncate_string(&htask.task.title, available_width));
-            let lines = vec![
-                Line::from(Span::styled(card_top, border_style)),
-                Line::from(Span::styled(title_text, title_style)),
-                Line::from(Span::styled(card_bottom, border_style)),
-            ];
-
-            ListItem::new(lines)
-        })
-        .collect();
-
-    let todo_list = List::new(todo_items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(std::format!("📝 TODO ({})", todo_tasks.len()))
-                .border_style(Style::default().fg(Color::Blue)),
-        );
-    f.render_widget(todo_list, columns[0]);
-
-    // Render IN PROGRESS column
+    // Render IN PROGRESS column with project grouping
     let is_progress_selected = app.selected_column == KanbanColumn::InProgress;
+    render_project_grouped_column(
+        f, columns[1], &project_groups, |g| &g.in_progress,
+        "IN PROGRESS", Color::Yellow, is_progress_selected,
+        app.selected_project_row, app.selected_task_in_column
+    );
 
-    // Build hierarchical task list (parents with indented children)
-    let hierarchical_progress = build_hierarchical_task_list(&in_progress_tasks);
-
-    let progress_items: std::vec::Vec<ListItem> = hierarchical_progress
-        .iter()
-        .enumerate()
-        .map(|(i, htask)| {
-            let age_days = calculate_task_age_days(htask.task);
-            let (age_icon, age_color) = get_age_indicator(age_days);
-
-            let is_selected = is_progress_selected && i == app.selected_task_in_column;
-
-            let card_top = if is_selected {
-                "┏━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            } else {
-                "┌─────────────────────────"
-            };
-
-            let card_bottom = if is_selected {
-                "┗━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            } else {
-                "└─────────────────────────"
-            };
-
-            let title_style = if is_selected {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(age_color)
-            };
-
-            let border_style = if is_selected {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
-
-            // Get tree indicator for hierarchical display
-            let tree_prefix = get_tree_indicator(htask.depth, htask.is_last_child);
-
-            // Calculate available width: 22 total - tree_prefix length - age_icon length
-            let available_width = 22 - tree_prefix.chars().count() - age_icon.chars().count();
-
-            let title_text = std::format!("│ {}{}{}", tree_prefix, age_icon, truncate_string(&htask.task.title, available_width));
-            let lines = vec![
-                Line::from(Span::styled(card_top, border_style)),
-                Line::from(Span::styled(title_text, title_style)),
-                Line::from(Span::styled(card_bottom, border_style)),
-            ];
-
-            ListItem::new(lines)
-        })
-        .collect();
-
-    let progress_list = List::new(progress_items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(std::format!("🚀 IN PROGRESS ({})", in_progress_tasks.len()))
-                .border_style(Style::default().fg(Color::Yellow)),
-        );
-    f.render_widget(progress_list, columns[1]);
-
-    // Render COMPLETED column
+    // Render COMPLETED column with project grouping
     let is_completed_selected = app.selected_column == KanbanColumn::Completed;
-
-    // Build hierarchical task list (parents with indented children)
-    let hierarchical_completed = build_hierarchical_task_list(&completed_tasks);
-
-    let completed_items: std::vec::Vec<ListItem> = hierarchical_completed
-        .iter()
-        .enumerate()
-        .map(|(i, htask)| {
-            let age_days = calculate_task_age_days(htask.task);
-            let (age_icon, _age_color) = get_age_indicator(age_days);
-
-            let is_selected = is_completed_selected && i == app.selected_task_in_column;
-
-            let card_top = if is_selected {
-                "┏━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            } else {
-                "┌─────────────────────────"
-            };
-
-            let card_bottom = if is_selected {
-                "┗━━━━━━━━━━━━━━━━━━━━━━━━━━"
-            } else {
-                "└─────────────────────────"
-            };
-
-            let title_style = if is_selected {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::Green)
-            };
-
-            let border_style = if is_selected {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
-
-            // Get tree indicator for hierarchical display
-            let tree_prefix = get_tree_indicator(htask.depth, htask.is_last_child);
-
-            // Calculate available width: 22 total - tree_prefix length - age_icon length
-            let available_width = 22 - tree_prefix.chars().count() - age_icon.chars().count();
-
-            let title_text = std::format!("│ {}{}{}", tree_prefix, age_icon, truncate_string(&htask.task.title, available_width));
-            let lines = vec![
-                Line::from(Span::styled(card_top, border_style)),
-                Line::from(Span::styled(title_text, title_style)),
-                Line::from(Span::styled(card_bottom, border_style)),
-            ];
-
-            ListItem::new(lines)
-        })
-        .collect();
-
-    let completed_list = List::new(completed_items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(std::format!("✅ COMPLETED ({})", completed_tasks.len()))
-                .border_style(Style::default().fg(Color::Green)),
-        );
-    f.render_widget(completed_list, columns[2]);
+    render_project_grouped_column(
+        f, columns[2], &project_groups, |g| &g.completed,
+        "COMPLETED", Color::Green, is_completed_selected,
+        app.selected_project_row, app.selected_task_in_column
+    );
 
     // Render 4TH COLUMN: Split vertically for ARCHIVED and ERRORED
     let split_column = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage(50),  // Archived section
-            Constraint::Percentage(50),  // Errored section
+            Constraint::Percentage(50),
+            Constraint::Percentage(50),
         ])
         .split(columns[3]);
 
-    // Render ARCHIVED section (top half of 4th column)
+    // Render ARCHIVED section with project grouping
     let is_archived_selected = app.selected_column == KanbanColumn::Archived;
+    render_project_grouped_column(
+        f, split_column[0], &project_groups, |g| &g.archived,
+        "ARCHIVED", Color::DarkGray, is_archived_selected,
+        app.selected_project_row, app.selected_task_in_column
+    );
 
-    // Build hierarchical task list (parents with indented children)
-    let hierarchical_archived = build_hierarchical_task_list(&archived_tasks);
-
-    let archived_items: std::vec::Vec<ListItem> = hierarchical_archived
-        .iter()
-        .enumerate()
-        .map(|(i, htask)| {
-            let is_selected = is_archived_selected && i == app.selected_task_in_column;
-
-            let card_top = if is_selected { "┏━━━━━━━━━━━━━━━━━━" } else { "┌──────────────────" };
-            let card_bottom = if is_selected { "┗━━━━━━━━━━━━━━━━━━" } else { "└──────────────────" };
-
-            let title_style = if is_selected {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
-
-            let border_style = if is_selected {
-                Style::default().fg(Color::Yellow)
-            } else {
-                Style::default().fg(Color::DarkGray)
-            };
-
-            // Get tree indicator for hierarchical display
-            let tree_prefix = get_tree_indicator(htask.depth, htask.is_last_child);
-
-            // Calculate available width: 17 total (narrower column) - tree_prefix length
-            let available_width = 17 - tree_prefix.chars().count();
-
-            let title_text = std::format!("│ {}{}", tree_prefix, truncate_string(&htask.task.title, available_width));
-            let lines = vec![
-                Line::from(Span::styled(card_top, border_style)),
-                Line::from(Span::styled(title_text, title_style)),
-                Line::from(Span::styled(card_bottom, border_style)),
-            ];
-
-            ListItem::new(lines)
-        })
-        .collect();
-
-    let archived_list = List::new(archived_items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(std::format!("📦 ARCHIVED ({})", archived_tasks.len()))
-                .border_style(Style::default().fg(Color::DarkGray)),
-        );
-    f.render_widget(archived_list, split_column[0]);
-
-    // Render ERRORED section (bottom half of 4th column)
+    // Render ERRORED section with project grouping
     let is_errored_selected = app.selected_column == KanbanColumn::Errored;
+    render_project_grouped_column(
+        f, split_column[1], &project_groups, |g| &g.errored,
+        "ERRORED", Color::Red, is_errored_selected,
+        app.selected_project_row, app.selected_task_in_column
+    );
+}
 
-    // Build hierarchical task list (parents with indented children)
-    let hierarchical_errored = build_hierarchical_task_list(&errored_tasks);
+/// Renders a status column with tasks grouped by project.
+///
+/// Each project appears as a collapsible section with its tasks underneath.
+/// Task cards show title, agent_persona, and complexity.
+fn render_project_grouped_column<'a, F>(
+    f: &mut Frame,
+    area: Rect,
+    project_groups: &'a [ProjectTaskGroup<'a>],
+    get_tasks: F,
+    title: &str,
+    color: Color,
+    is_active_column: bool,
+    selected_project_row: usize,
+    selected_task_in_column: usize,
+) where
+    F: Fn(&'a ProjectTaskGroup<'a>) -> &'a std::vec::Vec<&'a task_manager::domain::task::Task>,
+{
+    let border_color = color; // Keep original status color
+    let border_type = if is_active_column {
+        ratatui::widgets::BorderType::Double
+    } else {
+        ratatui::widgets::BorderType::Plain
+    };
 
-    let errored_items: std::vec::Vec<ListItem> = hierarchical_errored
-        .iter()
-        .enumerate()
-        .map(|(i, htask)| {
-            let is_selected = is_errored_selected && i == app.selected_task_in_column;
+    // Count total tasks in this column
+    let total_tasks: usize = project_groups.iter().map(|g| get_tasks(g).len()).sum();
 
-            let card_top = if is_selected { "┏━━━━━━━━━━━━━━━━━━" } else { "┌──────────────────" };
-            let card_bottom = if is_selected { "┗━━━━━━━━━━━━━━━━━━" } else { "└──────────────────" };
+    // Calculate card width based on available area (subtract 2 for left/right column borders)
+    let card_width = (area.width.saturating_sub(2).max(20)) as usize;
 
-            let title_style = if is_selected {
-                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::Red)
+    // Build list items with project headers and task cards
+    let mut items: std::vec::Vec<ListItem> = std::vec::Vec::new();
+    let mut selected_item_idx: std::option::Option<usize> = std::option::Option::None;
+    let mut global_position = 1_usize; // Human-readable position counter (1-indexed)
+
+    for (proj_idx, group) in project_groups.iter().enumerate() {
+        let tasks = get_tasks(group);
+        if tasks.is_empty() {
+            continue;
+        }
+
+        let is_selected_project = is_active_column && proj_idx == selected_project_row;
+
+        // Project header line
+        let project_header_style = if is_selected_project {
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Cyan)
+        };
+
+        let header_text = std::format!("── {} ({}) ──", truncate_string(&group.project_name, 12), tasks.len());
+        items.push(ListItem::new(Line::from(Span::styled(header_text, project_header_style))));
+
+        // Task cards under this project
+        for (task_idx, task) in tasks.iter().enumerate() {
+            let is_selected_task = is_active_column
+                && proj_idx == selected_project_row
+                && task_idx == selected_task_in_column;
+
+            // Track the index of the selected task in the items list
+            if is_selected_task {
+                selected_item_idx = std::option::Option::Some(items.len());
+            }
+
+            // Light background colors for selected tasks (same as PRD view)
+            let light_bg_color = match task.status {
+                task_manager::domain::task_status::TaskStatus::Todo => Color::Cyan,
+                task_manager::domain::task_status::TaskStatus::InProgress => Color::Yellow,
+                task_manager::domain::task_status::TaskStatus::Completed => Color::Green,
+                task_manager::domain::task_status::TaskStatus::Errored => Color::Red,
+                task_manager::domain::task_status::TaskStatus::PendingEnhancement => Color::LightCyan,
+                task_manager::domain::task_status::TaskStatus::PendingComprehensionTest => Color::LightCyan,
+                task_manager::domain::task_status::TaskStatus::PendingFollowOn => Color::LightCyan,
+                task_manager::domain::task_status::TaskStatus::PendingDecomposition => Color::Magenta,
+                task_manager::domain::task_status::TaskStatus::Decomposed => Color::LightBlue,
+                task_manager::domain::task_status::TaskStatus::OrchestrationComplete => Color::LightGreen,
+                task_manager::domain::task_status::TaskStatus::Archived => Color::Gray,
             };
 
-            let border_style = if is_selected {
-                Style::default().fg(Color::Yellow)
+            // Title line (truncated to fit in card width)
+            let title_text = truncate_string(&task.title, card_width.saturating_sub(4));
+
+            // Metadata line: complexity and priority (human-readable position #1, #2, #3)
+            let complexity = task.complexity
+                .map(|c| std::format!("C: {}", c))
+                .unwrap_or_else(|| String::from("C: ?"));
+
+            let priority = std::format!("P: #{}", global_position);
+
+            let meta_text = std::format!("{}  {}", complexity, priority);
+
+            // Increment position for next task
+            global_position += 1;
+
+            // Styles for selected vs unselected
+            let text_style = if is_selected_task {
+                Style::default().bg(light_bg_color).fg(Color::Black).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(color)
+            };
+
+            let meta_style = if is_selected_task {
+                Style::default().bg(light_bg_color).fg(Color::Black)
             } else {
                 Style::default().fg(Color::DarkGray)
             };
 
-            // Get tree indicator for hierarchical display
-            let tree_prefix = get_tree_indicator(htask.depth, htask.is_last_child);
+            // Pad text to fill full column width with background color
+            let title_padded = std::format!(" {:<width$} ", title_text, width = card_width.saturating_sub(2));
+            let meta_padded = std::format!(" {:<width$} ", meta_text, width = card_width.saturating_sub(2));
+            let empty_padded = std::format!("{:width$}", "", width = card_width);
 
-            // Calculate available width: 17 total (narrower column) - tree_prefix length
-            let available_width = 17 - tree_prefix.chars().count();
-
-            let title_text = std::format!("│ {}{}", tree_prefix, truncate_string(&htask.task.title, available_width));
-            let lines = vec![
-                Line::from(Span::styled(card_top, border_style)),
-                Line::from(Span::styled(title_text, title_style)),
-                Line::from(Span::styled(card_bottom, border_style)),
+            let card_lines = vec![
+                // Empty padding line
+                Line::from(Span::styled(empty_padded.clone(), if is_selected_task { Style::default().bg(light_bg_color) } else { Style::default() })),
+                // Title line
+                Line::from(Span::styled(title_padded, text_style)),
+                // Metadata line (C: X  P: Y)
+                Line::from(Span::styled(meta_padded, meta_style)),
+                // Empty padding line
+                Line::from(Span::styled(empty_padded, if is_selected_task { Style::default().bg(light_bg_color) } else { Style::default() })),
             ];
 
-            ListItem::new(lines)
-        })
-        .collect();
+            items.push(ListItem::new(card_lines));
+        }
+    }
 
-    let errored_list = List::new(errored_items)
+    let column_title = std::format!(" {} ({}) ", title, total_tasks);
+
+    let list = List::new(items)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(std::format!("❌ ERRORED ({})", errored_tasks.len()))
-                .border_style(Style::default().fg(Color::Red)),
-        );
-    f.render_widget(errored_list, split_column[1]);
+                .border_type(border_type)
+                .title(column_title)
+                .border_style(Style::default().fg(border_color))
+        )
+        .highlight_style(Style::default()); // No additional highlight since we style cards directly
+
+    // Create a ListState and set the selected index for scrolling
+    let mut list_state = ratatui::widgets::ListState::default();
+    if let std::option::Option::Some(idx) = selected_item_idx {
+        list_state.select(std::option::Option::Some(idx));
+    }
+
+    f.render_stateful_widget(list, area, &mut list_state);
 }
 
 /// Renders the column selector bar at the top of the task board.
@@ -6724,6 +9249,7 @@ fn render_help(f: &mut Frame, area: Rect) {
         "║                                                           ║",
         "║  Actions:                                                 ║",
         "║    g                  Go to task by ID (quick jump)       ║",
+        "║    G                  Generate artifacts (RAG knowledge)  ║",
         "║    Ctrl+R             Recent tasks (MRU list)             ║",
         "║    n                  View notification center            ║",
         "║    c                  Copy task to clipboard (Markdown)   ║",
@@ -7257,7 +9783,7 @@ fn render_task_editor_dialog(f: &mut Frame, app: &App) {
     let assignee_value = if app.task_editor_field == TaskEditorField::Assignee {
         &app.task_editor_input
     } else {
-        task.assignee.as_ref().map(|s| s.as_str()).unwrap_or("<none>")
+        task.agent_persona.as_ref().map(|s| s.as_str()).unwrap_or("<none>")
     };
 
     lines.push(Line::from(vec![
@@ -7495,7 +10021,7 @@ fn render_spotlight_dialog(f: &mut Frame, app: &App) {
     // Search input line
     let search_prompt = Span::styled("Search: ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD));
     let search_value = if app.spotlight_query.is_empty() {
-        Span::styled("Type to search across all tasks, PRDs, and projects...", Style::default().fg(Color::DarkGray))
+        Span::styled("Type to search across all tasks, PRDs, projects, and artifacts...", Style::default().fg(Color::DarkGray))
     } else {
         Span::raw(&app.spotlight_query)
     };
@@ -7525,57 +10051,91 @@ fn render_spotlight_dialog(f: &mut Frame, app: &App) {
             let is_selected = idx == app.spotlight_selected;
 
             match result {
-                SearchResultType::Task { title, description, .. } => {
+                SearchResultType::Task { title, description, score, .. } => {
                     let indicator = if is_selected {
                         Span::styled("▶ ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))
                     } else {
                         Span::raw("  ")
                     };
                     let type_badge = Span::styled("[Task] ", Style::default().fg(Color::Blue));
+                    let score_badge = if let Some(s) = score {
+                        Span::styled(std::format!("[{:.0}%] ", s * 100.0), Style::default().fg(Color::DarkGray))
+                    } else {
+                        Span::raw("")
+                    };
                     let task_title = if is_selected {
                         Span::styled(title, Style::default().fg(Color::White).add_modifier(Modifier::BOLD))
                     } else {
                         Span::raw(title)
                     };
-                    lines.push(Line::from(vec![indicator, type_badge, task_title]));
+                    lines.push(Line::from(vec![indicator, type_badge, score_badge, task_title]));
 
                     // Show description if selected
                     if is_selected && !description.is_empty() {
-                        let desc_preview = if description.len() > 60 {
-                            std::format!("    {}...", &description[..60])
-                        } else {
-                            std::format!("    {}", description)
-                        };
+                        let truncated = truncate_string(description, 60);
+                        let desc_preview = std::format!("    {}", truncated);
                         lines.push(Line::from(Span::styled(desc_preview, Style::default().fg(Color::DarkGray))));
                     }
                 }
-                SearchResultType::PRD { title, .. } => {
+                SearchResultType::PRD { title, score, .. } => {
                     let indicator = if is_selected {
                         Span::styled("▶ ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))
                     } else {
                         Span::raw("  ")
                     };
                     let type_badge = Span::styled("[PRD] ", Style::default().fg(Color::Yellow));
+                    let score_badge = if let Some(s) = score {
+                        Span::styled(std::format!("[{:.0}%] ", s * 100.0), Style::default().fg(Color::DarkGray))
+                    } else {
+                        Span::raw("")
+                    };
                     let prd_title = if is_selected {
                         Span::styled(title, Style::default().fg(Color::White).add_modifier(Modifier::BOLD))
                     } else {
                         Span::raw(title)
                     };
-                    lines.push(Line::from(vec![indicator, type_badge, prd_title]));
+                    lines.push(Line::from(vec![indicator, type_badge, score_badge, prd_title]));
                 }
-                SearchResultType::Project { name, .. } => {
+                SearchResultType::Project { name, score, .. } => {
                     let indicator = if is_selected {
                         Span::styled("▶ ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))
                     } else {
                         Span::raw("  ")
                     };
                     let type_badge = Span::styled("[Project] ", Style::default().fg(Color::Green));
+                    let score_badge = if let Some(s) = score {
+                        Span::styled(std::format!("[{:.0}%] ", s * 100.0), Style::default().fg(Color::DarkGray))
+                    } else {
+                        Span::raw("")
+                    };
                     let proj_name = if is_selected {
                         Span::styled(name, Style::default().fg(Color::White).add_modifier(Modifier::BOLD))
                     } else {
                         Span::raw(name)
                     };
-                    lines.push(Line::from(vec![indicator, type_badge, proj_name]));
+                    lines.push(Line::from(vec![indicator, type_badge, score_badge, proj_name]));
+                }
+                SearchResultType::Artifact { source_type, content_preview, score, .. } => {
+                    let indicator = if is_selected {
+                        Span::styled("▶ ", Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))
+                    } else {
+                        Span::raw("  ")
+                    };
+                    let type_badge = Span::styled(
+                        std::format!("[{}] ", source_type),
+                        Style::default().fg(Color::Cyan)
+                    );
+                    let score_badge = if let Some(s) = score {
+                        Span::styled(std::format!("[{:.0}%] ", s * 100.0), Style::default().fg(Color::DarkGray))
+                    } else {
+                        Span::raw("")
+                    };
+                    let preview = if is_selected {
+                        Span::styled(content_preview, Style::default().fg(Color::White).add_modifier(Modifier::BOLD))
+                    } else {
+                        Span::raw(content_preview)
+                    };
+                    lines.push(Line::from(vec![indicator, type_badge, score_badge, preview]));
                 }
             }
         }
@@ -8126,6 +10686,102 @@ fn get_age_indicator(age_days: i64) -> (&'static str, Color) {
     }
 }
 
+/// Groups tasks by project for the project-rows Kanban layout.
+///
+/// Each group contains a project name and tasks organized by status.
+struct ProjectTaskGroup<'a> {
+    /// Project name to display in the row header (or "Unassigned")
+    project_name: String,
+    /// Project ID for identification (None for unassigned tasks)
+    project_id: std::option::Option<String>,
+    /// Tasks in this project grouped by status
+    todo: std::vec::Vec<&'a task_manager::domain::task::Task>,
+    in_progress: std::vec::Vec<&'a task_manager::domain::task::Task>,
+    completed: std::vec::Vec<&'a task_manager::domain::task::Task>,
+    archived: std::vec::Vec<&'a task_manager::domain::task::Task>,
+    errored: std::vec::Vec<&'a task_manager::domain::task::Task>,
+}
+
+/// Groups tasks by their associated project for the project-rows Kanban layout.
+///
+/// Links tasks to projects via: Task.source_prd_id → PRD → PRD.project_id → Project
+/// Tasks without a PRD or project are grouped under "Unassigned".
+fn group_tasks_by_project<'a>(
+    tasks: &'a [task_manager::domain::task::Task],
+    prds: &'a [task_manager::domain::prd::PRD],
+    projects: &'a [task_manager::domain::project::Project],
+) -> std::vec::Vec<ProjectTaskGroup<'a>> {
+    // Build lookup maps
+    let prd_by_id: std::collections::HashMap<&str, &task_manager::domain::prd::PRD> = prds
+        .iter()
+        .map(|p| (p.id.as_str(), p))
+        .collect();
+
+    let project_by_id: std::collections::HashMap<&str, &task_manager::domain::project::Project> = projects
+        .iter()
+        .map(|p| (p.id.as_str(), p))
+        .collect();
+
+    // Group tasks by project_id
+    let mut groups_map: std::collections::HashMap<std::option::Option<String>, ProjectTaskGroup<'a>> =
+        std::collections::HashMap::new();
+
+    for task in tasks {
+        // Find project_id via PRD chain
+        let project_id = task
+            .source_prd_id
+            .as_ref()
+            .and_then(|prd_id| prd_by_id.get(prd_id.as_str()))
+            .map(|prd| prd.project_id.clone());
+
+        // Get or create group
+        let group = groups_map.entry(project_id.clone()).or_insert_with(|| {
+            let (name, id) = match &project_id {
+                std::option::Option::Some(pid) => {
+                    let project_name = project_by_id
+                        .get(pid.as_str())
+                        .map(|p| p.name.clone())
+                        .unwrap_or_else(|| std::format!("Project {}", truncate_string(pid, 8)));
+                    (project_name, std::option::Option::Some(pid.clone()))
+                }
+                std::option::Option::None => (String::from("Unassigned"), std::option::Option::None),
+            };
+            ProjectTaskGroup {
+                project_name: name,
+                project_id: id,
+                todo: std::vec::Vec::new(),
+                in_progress: std::vec::Vec::new(),
+                completed: std::vec::Vec::new(),
+                archived: std::vec::Vec::new(),
+                errored: std::vec::Vec::new(),
+            }
+        });
+
+        // Add task to appropriate status bucket
+        match task.status {
+            task_manager::domain::task_status::TaskStatus::Todo => group.todo.push(task),
+            task_manager::domain::task_status::TaskStatus::InProgress => group.in_progress.push(task),
+            task_manager::domain::task_status::TaskStatus::Completed => group.completed.push(task),
+            task_manager::domain::task_status::TaskStatus::Archived => group.archived.push(task),
+            task_manager::domain::task_status::TaskStatus::Errored => group.errored.push(task),
+            _ => group.todo.push(task), // Default other statuses to todo
+        }
+    }
+
+    // Convert to Vec and sort (projects first alphabetically, then Unassigned at end)
+    let mut groups: std::vec::Vec<ProjectTaskGroup<'a>> = groups_map.into_values().collect();
+    groups.sort_by(|a, b| {
+        match (&a.project_id, &b.project_id) {
+            (std::option::Option::None, std::option::Option::None) => std::cmp::Ordering::Equal,
+            (std::option::Option::None, std::option::Option::Some(_)) => std::cmp::Ordering::Greater,
+            (std::option::Option::Some(_), std::option::Option::None) => std::cmp::Ordering::Less,
+            (std::option::Option::Some(_), std::option::Option::Some(_)) => a.project_name.cmp(&b.project_name),
+        }
+    });
+
+    groups
+}
+
 /// Represents a task in a hierarchical display with depth information.
 ///
 /// Used to render parent tasks followed by their indented sub-tasks in the Kanban view.
@@ -8241,10 +10897,28 @@ fn format_timestamp(dt: &chrono::DateTime<chrono::Utc>) -> String {
 /// Renders the notification center dialog.
 ///
 /// Shows recent notifications in reverse chronological order with severity indicators.
+/// Supports Up/Down navigation to select and view full notification messages.
 fn render_notifications(f: &mut Frame, app: &App) {
+    let area = f.area();
+    let dialog_width: u16 = 70;
+    let dialog_height: u16 = 24;
+
+    let dialog_x = (area.width.saturating_sub(dialog_width)) / 2;
+    let dialog_y = (area.height.saturating_sub(dialog_height)) / 2;
+
+    let dialog_area = Rect {
+        x: dialog_x,
+        y: dialog_y,
+        width: dialog_width,
+        height: dialog_height,
+    };
+
+    // Clear area for solid black background
+    f.render_widget(ratatui::widgets::Clear, dialog_area);
+
     let mut lines = std::vec![
         Line::from(Span::styled(
-            std::format!("Notifications ({})", app.notifications.len()),
+            std::format!("Notifications ({}) - ↑/↓ to navigate", app.notifications.len()),
             Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
         )),
         Line::from(""),
@@ -8256,44 +10930,98 @@ fn render_notifications(f: &mut Frame, app: &App) {
             Style::default().fg(Color::Gray),
         )));
     } else {
-        for notification in app.notifications.iter().take(15) {
+        // Calculate visible window (show up to 10 notifications in list)
+        let max_visible = 10;
+        let start_idx = if app.selected_notification >= max_visible {
+            app.selected_notification - max_visible + 1
+        } else {
+            0
+        };
+
+        for (idx, notification) in app.notifications.iter().enumerate().skip(start_idx).take(max_visible) {
             // Format timestamp
             let now = chrono::Utc::now();
             let duration = now.signed_duration_since(notification.timestamp);
             let time_ago = if duration.num_seconds() < 60 {
-                std::format!("{}s ago", duration.num_seconds())
+                std::format!("{}s", duration.num_seconds())
             } else if duration.num_minutes() < 60 {
-                std::format!("{}m ago", duration.num_minutes())
+                std::format!("{}m", duration.num_minutes())
             } else if duration.num_hours() < 24 {
-                std::format!("{}h ago", duration.num_hours())
+                std::format!("{}h", duration.num_hours())
             } else {
-                std::format!("{}d ago", duration.num_days())
+                std::format!("{}d", duration.num_days())
             };
 
             // Get icon and color based on level
-            let (icon, color) = match notification.level {
-                NotificationLevel::Info => ("ℹ️ ", Color::Cyan),
+            let (icon, base_color) = match notification.level {
+                NotificationLevel::Info => ("ℹ ", Color::Cyan),
                 NotificationLevel::Success => ("✓ ", Color::Green),
-                NotificationLevel::Warning => ("⚠️ ", Color::Yellow),
+                NotificationLevel::Warning => ("⚠ ", Color::Yellow),
                 NotificationLevel::Error => ("✗ ", Color::Red),
             };
 
+            // Highlight selected notification
+            let is_selected = idx == app.selected_notification;
+            let prefix = if is_selected { "▶ " } else { "  " };
+
             let text = std::format!(
-                "{}{} ({})",
+                "{}{}{} ({})",
+                prefix,
                 icon,
-                truncate_string(&notification.message, 48),
+                truncate_string(&notification.message, 45),
                 time_ago
             );
 
-            lines.push(Line::from(Span::styled(text, Style::default().fg(color))));
+            let style = if is_selected {
+                Style::default().fg(base_color).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(base_color)
+            };
+
+            lines.push(Line::from(Span::styled(text, style)));
         }
 
-        if app.notifications.len() > 15 {
-            lines.push(Line::from(""));
+        // Show scroll indicator if there are more
+        if app.notifications.len() > max_visible {
             lines.push(Line::from(Span::styled(
-                std::format!("... and {} more", app.notifications.len() - 15),
-                Style::default().fg(Color::Gray),
+                std::format!("  ({}/{})", app.selected_notification + 1, app.notifications.len()),
+                Style::default().fg(Color::DarkGray),
             )));
+        }
+
+        // Show full message of selected notification at bottom
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            "─── Selected Message ───",
+            Style::default().fg(Color::DarkGray),
+        )));
+
+        if let std::option::Option::Some(selected) = app.notifications.get(app.selected_notification) {
+            // Word wrap the full message
+            let max_line_len = dialog_width as usize - 4;
+            let words: std::vec::Vec<&str> = selected.message.split_whitespace().collect();
+            let mut current_line = String::new();
+
+            for word in words {
+                if current_line.len() + word.len() + 1 > max_line_len {
+                    lines.push(Line::from(Span::styled(
+                        current_line.clone(),
+                        Style::default().fg(Color::White),
+                    )));
+                    current_line = String::from(word);
+                } else {
+                    if !current_line.is_empty() {
+                        current_line.push(' ');
+                    }
+                    current_line.push_str(word);
+                }
+            }
+            if !current_line.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    current_line,
+                    Style::default().fg(Color::White),
+                )));
+            }
         }
     }
 
@@ -8303,31 +11031,14 @@ fn render_notifications(f: &mut Frame, app: &App) {
         Style::default().fg(Color::Gray),
     )));
 
-    let dialog_width = 60;
-    let dialog_height = (lines.len() + 2).min(22) as u16;
-
-    let area = f.area();
-    let dialog_x = (area.width.saturating_sub(dialog_width)) / 2;
-    let dialog_y = (area.height.saturating_sub(dialog_height)) / 2;
-
-    let dialog_area = Rect {
-        x: dialog_x,
-        y: dialog_y,
-        width: dialog_width,
-        height: dialog_height,
-    };
-
-
     let paragraph = Paragraph::new(lines)
         .block(
             Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Yellow))
                 .title(" Notifications ")
-                .style(Style::default().bg(Color::Black))
         )
-        .style(Style::default().bg(Color::Black))
-        .wrap(Wrap { trim: true });
+        .style(Style::default().bg(Color::Black));
 
     f.render_widget(paragraph, dialog_area);
 }
@@ -8393,6 +11104,8 @@ fn render_setup_wizard(f: &mut Frame, app: &App) {
         SetupWizardStep::ConfigureMainSlot => render_wizard_configure_slot(f, area, app, "Main"),
         SetupWizardStep::ConfigureResearchSlot => render_wizard_configure_slot(f, area, app, "Research"),
         SetupWizardStep::ConfigureFallbackSlot => render_wizard_configure_slot(f, area, app, "Fallback"),
+        SetupWizardStep::ConfigureEmbeddingSlot => render_wizard_configure_slot(f, area, app, "Embedding"),
+        SetupWizardStep::ConfigureVisionSlot => render_wizard_configure_slot(f, area, app, "Vision"),
         SetupWizardStep::DatabaseConfiguration => render_wizard_database_configuration(f, area, app),
         SetupWizardStep::Confirmation => render_wizard_confirmation(f, area, app),
         SetupWizardStep::Complete => render_wizard_complete(f, area),
@@ -8476,7 +11189,7 @@ fn render_wizard_task_tool_slots(f: &mut Frame, area: Rect) {
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "Rigger uses three specialized LLM slots for different purposes:",
+            "Rigger uses five specialized LLM slots for different purposes:",
             Style::default().fg(Color::Gray)
         )),
         Line::from(""),
@@ -8500,6 +11213,20 @@ fn render_wizard_task_tool_slots(f: &mut Frame, area: Rect) {
         ]),
         Line::from("      - Used when main/research slots are unavailable"),
         Line::from("      - Typically a smaller, faster model"),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  🧠 Embedding: ", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD)),
+            Span::raw("Vector embeddings for RAG search"),
+        ]),
+        Line::from("      - Converts artifacts to searchable vectors"),
+        Line::from("      - Used for semantic similarity queries"),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  👁️ Vision: ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::raw("Image and PDF processing"),
+        ]),
+        Line::from("      - Describes images found in PRD documents"),
+        Line::from("      - Extracts text from PDF diagrams/charts"),
         Line::from(""),
         Line::from(Span::styled(
             "Each slot can use a different provider and model!",
@@ -8547,6 +11274,8 @@ fn render_wizard_configure_slot(f: &mut Frame, area: Rect, app: &App, slot_name:
         "Main" => (app.setup_wizard_main_provider_selection, &app.setup_wizard_main_model),
         "Research" => (app.setup_wizard_research_provider_selection, &app.setup_wizard_research_model),
         "Fallback" => (app.setup_wizard_fallback_provider_selection, &app.setup_wizard_fallback_model),
+        "Embedding" => (app.setup_wizard_embedding_provider_selection, &app.setup_wizard_embedding_model),
+        "Vision" => (app.setup_wizard_vision_provider_selection, &app.setup_wizard_vision_model),
         _ => (0, &app.setup_wizard_main_model),
     };
 
@@ -8554,6 +11283,8 @@ fn render_wizard_configure_slot(f: &mut Frame, area: Rect, app: &App, slot_name:
         "Main" => "2",
         "Research" => "3",
         "Fallback" => "4",
+        "Embedding" => "5",
+        "Vision" => "6",
         _ => "2",
     };
 
@@ -8561,6 +11292,8 @@ fn render_wizard_configure_slot(f: &mut Frame, area: Rect, app: &App, slot_name:
         "Main" => "🔧",
         "Research" => "🔍",
         "Fallback" => "🛟",
+        "Embedding" => "🧠",
+        "Vision" => "👁️",
         _ => "🔧",
     };
 
@@ -8652,7 +11385,7 @@ fn render_wizard_database_configuration(f: &mut Frame, area: Rect, app: &App) {
     let mut lines = std::vec![
         Line::from(""),
         Line::from(Span::styled(
-            "Step 3: Database Configuration",
+            "Step 7: Database Configuration",
             Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
         )),
         Line::from(""),
@@ -8735,10 +11468,24 @@ fn render_wizard_confirmation(f: &mut Frame, area: Rect, app: &App) {
         LLMProvider::Rig => "rig",
     };
 
+    let embedding_provider_name = match app.setup_wizard_embedding_provider {
+        LLMProvider::Ollama => "ollama",
+        LLMProvider::Candle => "candle",
+        LLMProvider::Mistral => "mistral",
+        LLMProvider::Rig => "rig",
+    };
+
+    let vision_provider_name = match app.setup_wizard_vision_provider {
+        LLMProvider::Ollama => "ollama",
+        LLMProvider::Candle => "candle",
+        LLMProvider::Mistral => "mistral",
+        LLMProvider::Rig => "rig",
+    };
+
     let mut lines = std::vec![
         Line::from(""),
         Line::from(Span::styled(
-            "Step 6: Confirm Settings",
+            "Step 8: Confirm Settings",
             Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
         )),
         Line::from(""),
@@ -8776,6 +11523,26 @@ fn render_wizard_confirmation(f: &mut Frame, area: Rect, app: &App) {
         Line::from(vec![
             Span::styled("    Model:    ", Style::default().fg(Color::Cyan)),
             Span::styled(&app.setup_wizard_fallback_model, Style::default().fg(Color::White)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("🧠 Embedding Slot:", Style::default().fg(Color::Blue).add_modifier(Modifier::BOLD))),
+        Line::from(vec![
+            Span::styled("    Provider: ", Style::default().fg(Color::Cyan)),
+            Span::styled(embedding_provider_name, Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("    Model:    ", Style::default().fg(Color::Cyan)),
+            Span::styled(&app.setup_wizard_embedding_model, Style::default().fg(Color::White)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled("👁️ Vision Slot:", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))),
+        Line::from(vec![
+            Span::styled("    Provider: ", Style::default().fg(Color::Cyan)),
+            Span::styled(vision_provider_name, Style::default().fg(Color::White)),
+        ]),
+        Line::from(vec![
+            Span::styled("    Model:    ", Style::default().fg(Color::Cyan)),
+            Span::styled(&app.setup_wizard_vision_model, Style::default().fg(Color::White)),
         ]),
         Line::from(""),
         Line::from(vec![
@@ -8930,8 +11697,6 @@ fn render_interactive_generation(f: &mut Frame, area: Rect, app: &App) {
     };
 
     // Show conversation messages with scrolling support
-    let total_messages = app.prd_gen_conversation.len();
-
     // Auto-scroll to bottom when new messages arrive (unless user has scrolled up)
     let visible_messages: std::vec::Vec<&PRDGenMessage> = app
         .prd_gen_conversation
@@ -8986,6 +11751,7 @@ fn render_interactive_generation(f: &mut Frame, area: Rect, app: &App) {
                             }
                         }
                         BoxContent::Validation { .. } => 6, // Task + blank + message + borders
+                        BoxContent::Artifact { .. } => 6, // Source type + count + preview + borders
                     };
 
                     message_items.push(MessageItem::Block {
@@ -9094,7 +11860,8 @@ fn render_interactive_generation(f: &mut Frame, area: Rect, app: &App) {
 
     // If no messages fit, show at least one (the one at scroll offset)
     if visible_items.is_empty() && !message_items.is_empty() {
-        visible_items.push(message_items[start_idx].clone());
+        let safe_idx = start_idx.min(message_items.len() - 1);
+        visible_items.push(message_items[safe_idx].clone());
     }
 
     // Create dynamic vertical layout for visible messages
@@ -9213,6 +11980,25 @@ fn render_interactive_generation(f: &mut Frame, area: Rect, app: &App) {
                             .wrap(Wrap { trim: true });
 
                         f.render_widget(validation_block, message_areas[idx]);
+                    }
+                    BoxContent::Artifact { source_type, content_preview, count } => {
+                        let content_lines = std::vec![
+                            Line::from(std::format!("Source: {}", source_type)),
+                            Line::from(std::format!("Count: {} artifacts", count)),
+                            Line::from(""),
+                            Line::from(std::format!("Preview: {}", content_preview)),
+                        ];
+
+                        let artifact_block = Paragraph::new(content_lines)
+                            .block(
+                                Block::default()
+                                    .borders(Borders::ALL)
+                                    .title(std::format!(" Knowledge Artifact [{}] ", timestamp))
+                                    .border_style(Style::default().fg(Color::Green))
+                            )
+                            .wrap(Wrap { trim: true });
+
+                        f.render_widget(artifact_block, message_areas[idx]);
                     }
                 }
             }
@@ -9381,8 +12167,13 @@ fn render_prd_processing(f: &mut Frame, area: Rect, app: &App) {
         ("Reading file", PRDProcessingState::ReadingFile),
         ("Parsing PRD", PRDProcessingState::ParsingPRD),
         ("Loading config", PRDProcessingState::LoadingConfig),
+        ("Processing media", PRDProcessingState::ProcessingMedia),
         ("Generating tasks", PRDProcessingState::GeneratingTasks),
         ("Saving to database", PRDProcessingState::SavingTasks),
+        ("Assigning personas", PRDProcessingState::AssigningPersonas),
+        ("Ingesting artifacts", PRDProcessingState::IngestingArtifacts),
+        ("Linking artifacts", PRDProcessingState::LinkingArtifacts),
+        ("Decomposing tasks", PRDProcessingState::DecomposingTasks),
         ("Reloading tasks", PRDProcessingState::ReloadingTasks),
     ];
 
@@ -9399,18 +12190,28 @@ fn render_prd_processing(f: &mut Frame, area: Rect, app: &App) {
                     PRDProcessingState::ReadingFile => 0,
                     PRDProcessingState::ParsingPRD => 1,
                     PRDProcessingState::LoadingConfig => 2,
-                    PRDProcessingState::GeneratingTasks => 3,
-                    PRDProcessingState::SavingTasks => 4,
-                    PRDProcessingState::ReloadingTasks => 5,
+                    PRDProcessingState::ProcessingMedia => 3,
+                    PRDProcessingState::GeneratingTasks => 4,
+                    PRDProcessingState::SavingTasks => 5,
+                    PRDProcessingState::AssigningPersonas => 6,
+                    PRDProcessingState::IngestingArtifacts => 7,
+                    PRDProcessingState::LinkingArtifacts => 8,
+                    PRDProcessingState::DecomposingTasks => 9,
+                    PRDProcessingState::ReloadingTasks => 10,
                     _ => 99,
                 };
                 let current_index = match state {
                     PRDProcessingState::ReadingFile => 0,
                     PRDProcessingState::ParsingPRD => 1,
                     PRDProcessingState::LoadingConfig => 2,
-                    PRDProcessingState::GeneratingTasks => 3,
-                    PRDProcessingState::SavingTasks => 4,
-                    PRDProcessingState::ReloadingTasks => 5,
+                    PRDProcessingState::ProcessingMedia => 3,
+                    PRDProcessingState::GeneratingTasks => 4,
+                    PRDProcessingState::SavingTasks => 5,
+                    PRDProcessingState::AssigningPersonas => 6,
+                    PRDProcessingState::IngestingArtifacts => 7,
+                    PRDProcessingState::LinkingArtifacts => 8,
+                    PRDProcessingState::DecomposingTasks => 9,
+                    PRDProcessingState::ReloadingTasks => 10,
                     _ => 99,
                 };
 
@@ -9431,6 +12232,23 @@ fn render_prd_processing(f: &mut Frame, area: Rect, app: &App) {
     }
 
     lines.push(Line::from(""));
+
+    // Calculate progress for gauge
+    let (current_step_index, total_steps) = match &app.prd_processing_state {
+        PRDProcessingState::ReadingFile => (1, 11),
+        PRDProcessingState::ParsingPRD => (2, 11),
+        PRDProcessingState::LoadingConfig => (3, 11),
+        PRDProcessingState::ProcessingMedia => (4, 11),
+        PRDProcessingState::GeneratingTasks => (5, 11),
+        PRDProcessingState::SavingTasks => (6, 11),
+        PRDProcessingState::AssigningPersonas => (7, 11),
+        PRDProcessingState::IngestingArtifacts => (8, 11),
+        PRDProcessingState::LinkingArtifacts => (9, 11),
+        PRDProcessingState::DecomposingTasks => (10, 11),
+        PRDProcessingState::ReloadingTasks => (11, 11),
+        PRDProcessingState::Complete { .. } => (11, 11),
+        _ => (0, 11),
+    };
 
     // Show current step based on state machine
     match &app.prd_processing_state {
@@ -9519,28 +12337,114 @@ fn render_prd_processing(f: &mut Frame, area: Rect, app: &App) {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
             Span::styled("Press ", Style::default().fg(Color::Gray)),
+            Span::styled("R", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            Span::styled(" to retry", Style::default().fg(Color::Gray)),
+            Span::styled(" | ", Style::default().fg(Color::DarkGray)),
             Span::styled("Esc", Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
             Span::styled(" to close", Style::default().fg(Color::Gray)),
         ]));
         }
-        PRDProcessingState::Complete { task_count } => {
+        PRDProcessingState::Complete { task_count, artifact_count, subtask_count } => {
+            // Header
             lines.push(Line::from(Span::styled(
-                "✓ Complete!",
+                "✓ Processing Complete!",
                 Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
             )));
             lines.push(Line::from(""));
+
+            // Duration
+            if let std::option::Option::Some(start_time) = app.prd_processing_start_time {
+                let duration = chrono::Utc::now().signed_duration_since(start_time);
+                let seconds = duration.num_seconds();
+                let duration_str = if seconds < 60 {
+                    std::format!("{}s", seconds)
+                } else {
+                    std::format!("{}m {}s", seconds / 60, seconds % 60)
+                };
+                lines.push(Line::from(vec![
+                    Span::styled("Duration: ", Style::default().fg(Color::Gray)),
+                    Span::styled(duration_str, Style::default().fg(Color::Cyan)),
+                ]));
+                lines.push(Line::from(""));
+            }
+
+            // Task summary
             lines.push(Line::from(Span::styled(
-                std::format!("Generated {} tasks", task_count),
-                Style::default().fg(Color::White)
+                "Task Generation Summary",
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
             )));
             lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled("  Tasks:     ", Style::default().fg(Color::Gray)),
+                Span::styled(std::format!("{}", task_count), Style::default().fg(Color::White).add_modifier(Modifier::BOLD)),
+            ]));
+            lines.push(Line::from(vec![
+                Span::styled("  Artifacts: ", Style::default().fg(Color::Gray)),
+                Span::styled(std::format!("{}", artifact_count), Style::default().fg(Color::Cyan)),
+            ]));
+            if *subtask_count > 0 {
+                lines.push(Line::from(vec![
+                    Span::styled("  Subtasks:  ", Style::default().fg(Color::Gray)),
+                    Span::styled(std::format!("{}", subtask_count), Style::default().fg(Color::Magenta)),
+                ]));
+            }
             lines.push(Line::from(""));
+
+            // Complexity breakdown
+            if !app.prd_processing_complexity_counts.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "Complexity Distribution",
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                )));
+                lines.push(Line::from(""));
+
+                // Sort by complexity level
+                let mut sorted_complexities: std::vec::Vec<_> = app.prd_processing_complexity_counts.iter().collect();
+                sorted_complexities.sort_by_key(|(k, _)| *k);
+
+                // Calculate average complexity
+                let total_complexity: u32 = sorted_complexities.iter().map(|(k, v)| **k as u32 * **v as u32).sum();
+                let avg_complexity = if *task_count > 0 {
+                    total_complexity as f32 / *task_count as f32
+                } else {
+                    0.0
+                };
+
+                // Show distribution with visual bars
+                let max_count = sorted_complexities.iter().map(|(_, v)| **v).max().unwrap_or(1);
+                for (complexity, count) in sorted_complexities {
+                    let bar_length = ((*count as f32 / max_count as f32) * 20.0) as usize;
+                    let bar = "█".repeat(bar_length);
+
+                    let color = match complexity {
+                        1..=3 => Color::Green,
+                        4..=6 => Color::Yellow,
+                        7..=8 => Color::LightRed,
+                        _ => Color::Red,
+                    };
+
+                    lines.push(Line::from(vec![
+                        Span::styled(std::format!("  C{}: ", complexity), Style::default().fg(Color::Gray)),
+                        Span::styled(bar, Style::default().fg(color)),
+                        Span::styled(std::format!(" {}", count), Style::default().fg(Color::White)),
+                    ]));
+                }
+
+                lines.push(Line::from(""));
+                lines.push(Line::from(vec![
+                    Span::styled("  Average: ", Style::default().fg(Color::Gray)),
+                    Span::styled(std::format!("{:.1}", avg_complexity), Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                ]));
+                lines.push(Line::from(""));
+            }
+
+            // Success message
             lines.push(Line::from(Span::styled(
-                "Tasks have been saved to the database.",
-                Style::default().fg(Color::Gray)
+                "All tasks have been saved to the database.",
+                Style::default().fg(Color::Green)
             )));
             lines.push(Line::from(Span::styled(
-                "You can now view them in the Kanban board.",
+                "View them in the Kanban board to get started!",
                 Style::default().fg(Color::Gray)
             )));
             lines.push(Line::from(""));
@@ -9551,6 +12455,29 @@ fn render_prd_processing(f: &mut Frame, area: Rect, app: &App) {
                 Span::styled(" to continue", Style::default().fg(Color::Gray)),
             ]));
         }
+        PRDProcessingState::Cancelled => {
+            lines.push(Line::from(Span::styled(
+                "⚠ Cancelled",
+                Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "PRD processing was cancelled.",
+                Style::default().fg(Color::White)
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(Span::styled(
+                "No tasks were saved to the database.",
+                Style::default().fg(Color::Gray)
+            )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled("Press ", Style::default().fg(Color::Gray)),
+                Span::styled("Esc", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(" to close", Style::default().fg(Color::Gray)),
+            ]));
+        }
         state => {
             // Show spinner and current step
             let spinner = app.get_spinner_char();
@@ -9559,8 +12486,13 @@ fn render_prd_processing(f: &mut Frame, area: Rect, app: &App) {
                 PRDProcessingState::ReadingFile => "Reading PRD file...",
                 PRDProcessingState::ParsingPRD => "Parsing PRD structure...",
                 PRDProcessingState::LoadingConfig => "Loading configuration...",
+                PRDProcessingState::ProcessingMedia => "Processing images/PDFs with vision LLM...",
                 PRDProcessingState::GeneratingTasks => "Generating tasks via LLM...",
                 PRDProcessingState::SavingTasks => "Saving tasks to database...",
+                PRDProcessingState::AssigningPersonas => "Assigning personas to tasks via LLM...",
+                PRDProcessingState::IngestingArtifacts => "Ingesting RAG artifacts...",
+                PRDProcessingState::LinkingArtifacts => "Linking artifacts to tasks...",
+                PRDProcessingState::DecomposingTasks => "Decomposing complex tasks...",
                 PRDProcessingState::ReloadingTasks => "Reloading task list...",
                 _ => "Processing...",
             };
@@ -9574,6 +12506,12 @@ fn render_prd_processing(f: &mut Frame, area: Rect, app: &App) {
                 "Please wait...",
                 Style::default().fg(Color::DarkGray)
             )));
+            lines.push(Line::from(""));
+            lines.push(Line::from(vec![
+                Span::styled("Press ", Style::default().fg(Color::DarkGray)),
+                Span::styled("c", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::styled(" to cancel", Style::default().fg(Color::DarkGray)),
+            ]));
         }
     }
 
@@ -9594,22 +12532,77 @@ fn render_prd_processing(f: &mut Frame, area: Rect, app: &App) {
     let dialog_x = (area.width.saturating_sub(dialog_width)) / 2;
     let dialog_y = (area.height.saturating_sub(dialog_height)) / 2;
 
-    let dialog_area = Rect {
-        x: dialog_x,
-        y: dialog_y,
-        width: dialog_width,
-        height: dialog_height,
-    };
+    // Determine if we should show gauge (only for in-progress states)
+    let show_gauge = !matches!(
+        &app.prd_processing_state,
+        PRDProcessingState::Failed { .. } | PRDProcessingState::Complete { .. }
+    );
 
-    f.render_widget(paragraph, dialog_area);
+    if show_gauge && current_step_index > 0 {
+        // Add 3 lines for gauge (space + gauge + space)
+        let gauge_height = 3;
+        let total_dialog_height = dialog_height + gauge_height;
+
+        let dialog_area = Rect {
+            x: dialog_x,
+            y: dialog_y,
+            width: dialog_width,
+            height: total_dialog_height,
+        };
+
+        // Split into gauge section and content section
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(gauge_height),
+                Constraint::Length(dialog_height),
+            ])
+            .split(dialog_area);
+
+        // Create gauge widget
+        let progress_ratio = current_step_index as f64 / total_steps as f64;
+        let progress_label = std::format!("Step {} of {} - {}%",
+            current_step_index,
+            total_steps,
+            (progress_ratio * 100.0) as u16
+        );
+
+        let gauge = ratatui::widgets::Gauge::default()
+            .block(Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::Cyan)))
+            .gauge_style(Style::default().fg(Color::Cyan).bg(Color::Black).add_modifier(Modifier::BOLD))
+            .percent((progress_ratio * 100.0) as u16)
+            .label(progress_label);
+
+        f.render_widget(gauge, chunks[0]);
+        f.render_widget(paragraph, chunks[1]);
+    } else {
+        // No gauge - render normally
+        let dialog_area = Rect {
+            x: dialog_x,
+            y: dialog_y,
+            width: dialog_width,
+            height: dialog_height,
+        };
+
+        f.render_widget(paragraph, dialog_area);
+    }
 }
 
 /// Truncates a string to the specified length and adds "..." if truncated.
+///
+/// This function is UTF-8 safe and respects character boundaries.
+/// It counts characters, not bytes, to avoid panicking on multi-byte characters.
 fn truncate_string(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
+    if max_len <= 3 {
+        return s.chars().take(max_len).collect();
+    }
+
+    let char_count = s.chars().count();
+    if char_count <= max_len {
         s.to_string()
     } else {
-        std::format!("{}...", &s[..max_len - 3])
+        let truncated: String = s.chars().take(max_len - 3).collect();
+        std::format!("{}...", truncated)
     }
 }
 
@@ -9639,6 +12632,94 @@ fn calculate_safe_dialog_height(content_lines: usize, available_height: u16) -> 
     let desired_height = content_lines as u16 + 2; // +2 for borders
     let max_height = available_height.saturating_sub(4); // Leave 4 lines padding
     std::cmp::min(desired_height, max_height)
+}
+
+/// Dummy directory scanner for URL-only artifact generation (Phase 6 TUI Integration).
+///
+/// This struct implements DirectoryScannerPort with no-op operations for cases
+/// where we only need web crawling, not directory scanning.
+///
+/// Revision History
+/// - 2025-11-30T19:45:00Z @AI: Add dummy scanner for TUI artifact generation.
+struct DummyDirectoryScanner;
+
+#[async_trait::async_trait]
+impl task_manager::ports::directory_scanner_port::DirectoryScannerPort for DummyDirectoryScanner {
+    async fn scan(
+        &self,
+        _config: &task_manager::domain::scan_config::ScanConfig,
+    ) -> std::result::Result<task_manager::ports::directory_scanner_port::ScanResult, task_manager::domain::scan_config::ScanError> {
+        std::result::Result::Ok(task_manager::ports::directory_scanner_port::ScanResult::new())
+    }
+
+    async fn read_file(
+        &self,
+        _path: &std::path::Path,
+        _config: &task_manager::domain::scan_config::ScanConfig,
+    ) -> std::result::Result<std::option::Option<task_manager::domain::scan_config::ScannedFile>, task_manager::domain::scan_config::ScanError> {
+        std::result::Result::Ok(std::option::Option::None)
+    }
+
+    async fn has_file_changed(
+        &self,
+        _path: &std::path::Path,
+        _previous: &task_manager::domain::scan_config::FileFingerprint,
+    ) -> std::result::Result<bool, task_manager::domain::scan_config::ScanError> {
+        std::result::Result::Ok(false)
+    }
+
+    async fn find_deleted_files(
+        &self,
+        _config: &task_manager::domain::scan_config::ScanConfig,
+        _previous_paths: &[String],
+    ) -> std::result::Result<std::vec::Vec<String>, task_manager::domain::scan_config::ScanError> {
+        std::result::Result::Ok(std::vec::Vec::new())
+    }
+}
+
+/// Dummy web crawler for directory-only artifact generation (Phase 6 TUI Integration).
+///
+/// This struct implements WebCrawlerPort with no-op operations for cases
+/// where we only need directory scanning, not web crawling.
+///
+/// Revision History
+/// - 2025-11-30T19:45:00Z @AI: Add dummy crawler for TUI artifact generation.
+struct DummyWebCrawler;
+
+#[async_trait::async_trait]
+impl task_orchestrator::ports::web_crawler_port::WebCrawlerPort for DummyWebCrawler {
+    async fn crawl(
+        &self,
+        _config: &task_orchestrator::domain::crawl_result::CrawlConfig,
+    ) -> std::result::Result<task_orchestrator::ports::web_crawler_port::CrawlResult, task_orchestrator::domain::crawl_result::CrawlError> {
+        std::result::Result::Ok(task_orchestrator::ports::web_crawler_port::CrawlResult::new())
+    }
+
+    async fn fetch_page(
+        &self,
+        _url: &str,
+        _config: &task_orchestrator::domain::crawl_result::CrawlConfig,
+    ) -> std::result::Result<task_orchestrator::domain::crawl_result::CrawledPage, task_orchestrator::domain::crawl_result::CrawlError> {
+        std::result::Result::Err(task_orchestrator::domain::crawl_result::CrawlError::NetworkError(
+            String::from("Not implemented"),
+        ))
+    }
+
+    fn extract_text(&self, _html: &str, _config: &task_orchestrator::domain::crawl_result::CrawlConfig) -> String {
+        String::new()
+    }
+
+    fn extract_title(&self, _html: &str) -> String {
+        String::new()
+    }
+
+    fn extract_links(&self, _html: &str, _base_url: &str) -> std::vec::Vec<String> {
+        std::vec::Vec::new()
+    }
+
+    fn should_follow(&self, _url: &str, _base_url: &str, _config: &task_orchestrator::domain::crawl_result::CrawlConfig) -> bool {
+        false
+    }
 }
 
 #[cfg(test)]
@@ -10205,10 +13286,12 @@ mod tests {
         // Justification: UI needs task count for success message.
         let mut app = App::new();
 
-        app.prd_processing_state = PRDProcessingState::Complete { task_count: 42 };
+        app.prd_processing_state = PRDProcessingState::Complete { task_count: 42, artifact_count: 0, subtask_count: 0 };
 
-        if let PRDProcessingState::Complete { task_count } = app.prd_processing_state {
+        if let PRDProcessingState::Complete { task_count, artifact_count, subtask_count } = app.prd_processing_state {
             std::assert_eq!(task_count, 42);
+            std::assert_eq!(artifact_count, 0);
+            std::assert_eq!(subtask_count, 0);
         } else {
             std::panic!("Expected Complete state with task_count");
         }
@@ -10243,7 +13326,7 @@ mod tests {
         std::assert!(!matches!(app.prd_processing_state, PRDProcessingState::Complete { .. }));
 
         // Complete - Enter should close
-        app.prd_processing_state = PRDProcessingState::Complete { task_count: 5 };
+        app.prd_processing_state = PRDProcessingState::Complete { task_count: 5, artifact_count: 0, subtask_count: 0 };
         std::assert!(matches!(app.prd_processing_state, PRDProcessingState::Complete { .. }));
     }
 
@@ -10274,10 +13357,14 @@ mod tests {
             PRDProcessingState::ReadingFile,
             PRDProcessingState::ParsingPRD,
             PRDProcessingState::LoadingConfig,
+            PRDProcessingState::ProcessingMedia,
             PRDProcessingState::GeneratingTasks,
             PRDProcessingState::SavingTasks,
+            PRDProcessingState::IngestingArtifacts,
+            PRDProcessingState::LinkingArtifacts,
+            PRDProcessingState::DecomposingTasks,
             PRDProcessingState::ReloadingTasks,
-            PRDProcessingState::Complete { task_count: 1 },
+            PRDProcessingState::Complete { task_count: 1, artifact_count: 0, subtask_count: 0 },
             PRDProcessingState::Failed { error: String::from("test") },
         ];
 
@@ -10288,11 +13375,17 @@ mod tests {
                 PRDProcessingState::ReadingFile => "reading",
                 PRDProcessingState::ParsingPRD => "parsing",
                 PRDProcessingState::LoadingConfig => "loading",
+                PRDProcessingState::ProcessingMedia => "processing_media",
                 PRDProcessingState::GeneratingTasks => "generating",
                 PRDProcessingState::SavingTasks => "saving",
+                PRDProcessingState::AssigningPersonas => "assigning_personas",
+                PRDProcessingState::IngestingArtifacts => "ingesting",
+                PRDProcessingState::LinkingArtifacts => "linking",
+                PRDProcessingState::DecomposingTasks => "decomposing",
                 PRDProcessingState::ReloadingTasks => "reloading",
                 PRDProcessingState::Complete { .. } => "complete",
                 PRDProcessingState::Failed { .. } => "failed",
+                PRDProcessingState::Cancelled => "cancelled",
             };
             std::assert!(!matched.is_empty());
         }
@@ -10304,11 +13397,14 @@ mod tests {
         // Justification: Core data structure for interactive generation conversation.
         let msg = PRDGenMessage {
             role: PRDGenRole::User,
-            content: String::from("Focus on OAuth2"),
+            content: MessageContent::Text(String::from("Focus on OAuth2")),
             timestamp: chrono::Utc::now(),
         };
 
-        std::assert_eq!(msg.content, "Focus on OAuth2");
+        match &msg.content {
+            MessageContent::Text(text) => std::assert_eq!(text, "Focus on OAuth2"),
+            _ => std::panic!("Expected Text content"),
+        }
         std::assert!(matches!(msg.role, PRDGenRole::User));
         std::assert!(msg.timestamp <= chrono::Utc::now());
     }
@@ -10321,19 +13417,19 @@ mod tests {
 
         app.prd_gen_conversation.push(PRDGenMessage {
             role: PRDGenRole::System,
-            content: String::from("Starting generation..."),
+            content: MessageContent::Text(String::from("Starting generation...")),
             timestamp: chrono::Utc::now(),
         });
 
         app.prd_gen_conversation.push(PRDGenMessage {
             role: PRDGenRole::Assistant,
-            content: String::from("Analyzing PRD..."),
+            content: MessageContent::Text(String::from("Analyzing PRD...")),
             timestamp: chrono::Utc::now(),
         });
 
         app.prd_gen_conversation.push(PRDGenMessage {
             role: PRDGenRole::User,
-            content: String::from("Focus on security"),
+            content: MessageContent::Text(String::from("Focus on security")),
             timestamp: chrono::Utc::now(),
         });
 
@@ -10506,7 +13602,7 @@ mod tests {
         app.prd_gen_last_message = app.prd_gen_input.clone();
         app.prd_gen_conversation.push(PRDGenMessage {
             role: PRDGenRole::User,
-            content: app.prd_gen_input.clone(),
+            content: MessageContent::Text(app.prd_gen_input.clone()),
             timestamp: chrono::Utc::now(),
         });
         app.prd_gen_input.clear();
@@ -10529,7 +13625,7 @@ mod tests {
         app.prd_gen_last_message = app.prd_gen_input.clone();
         app.prd_gen_conversation.push(PRDGenMessage {
             role: PRDGenRole::User,
-            content: app.prd_gen_input.clone(),
+            content: MessageContent::Text(app.prd_gen_input.clone()),
             timestamp: chrono::Utc::now(),
         });
         app.prd_gen_input.clear();
@@ -10584,25 +13680,24 @@ mod tests {
         std::assert_eq!(app.prd_gen_partial_tasks[0].validation_messages[1], validation_msg_2);
 
         // Step 4: Add validation box to conversation (simulating what the handler does)
-        let validation_box = std::format!(
-            "┌─ Validation ─────────────────────────────────\n\
-             │ Task: {}\n\
-             │ {}\n\
-             └──────────────────────────────────────────────",
-            task_title,
-            validation_msg_1
-        );
-
         app.prd_gen_conversation.push(PRDGenMessage {
             role: PRDGenRole::System,
-            content: validation_box.clone(),
+            content: MessageContent::Box(BoxContent::Validation {
+                task_title: task_title.clone(),
+                message: validation_msg_1.clone(),
+            }),
             timestamp: chrono::Utc::now(),
         });
 
         // Verify conversation has the validation box
         std::assert_eq!(app.prd_gen_conversation.len(), 1);
-        std::assert!(app.prd_gen_conversation[0].content.contains("┌─ Validation"));
-        std::assert!(app.prd_gen_conversation[0].content.contains("Assignee 'Bob' not found"));
+        match &app.prd_gen_conversation[0].content {
+            MessageContent::Box(BoxContent::Validation { task_title: t, message: m }) => {
+                std::assert_eq!(t, "Setup authentication");
+                std::assert!(m.contains("Assignee 'Bob' not found"));
+            }
+            _ => std::panic!("Expected Validation box content"),
+        }
 
         // Step 5: Verify rendering would show red rows (test data structure, not rendering)
         // In the actual UI, these messages would render as:
@@ -10614,5 +13709,284 @@ mod tests {
             // Verify messages are accessible for red row rendering
             std::assert!(!msg.is_empty());
         }
+    }
+
+
+    #[tokio::test]
+    async fn test_search_all_substring_matching_for_tasks() {
+        // Test: Validates that tasks are found using substring matching.
+        // Justification: Tasks don't use semantic search, only substring.
+        let mut app = App::new();
+
+        app.tasks = vec![
+            task_manager::domain::task::Task {
+                id: String::from("task-1"),
+                title: String::from("Implement authentication system"),
+                description: String::from("Add OAuth2 support"),
+                status: task_manager::domain::task_status::TaskStatus::Todo,
+                agent_persona: None,
+                due_date: None,
+                source_transcript_id: None,
+                source_prd_id: None,
+                parent_task_id: None,
+                subtask_ids: Vec::new(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                enhancements: None,
+                comprehension_tests: None,
+                complexity: None,
+                reasoning: None,
+                completion_summary: None,
+                context_files: Vec::new(),
+                dependencies: Vec::new(),
+                sort_order: Some(0),
+            },
+        ];
+
+        let results = app.search_all("authentication").await;
+
+        std::assert_eq!(results.len(), 1);
+        match &results[0] {
+            SearchResultType::Task { title, .. } => {
+                std::assert_eq!(title, "Implement authentication system");
+            }
+            _ => std::panic!("Expected Task search result"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_search_all_substring_matching_for_prds() {
+        // Test: Validates that PRDs are found using substring matching.
+        // Justification: PRDs use substring search on title.
+        let mut app = App::new();
+
+        app.prds = vec![
+            task_manager::domain::prd::PRD {
+                id: String::from("prd-1"),
+                project_id: String::from("proj-1"),
+                title: String::from("User Authentication Feature"),
+                objectives: Vec::new(),
+                tech_stack: Vec::new(),
+                constraints: Vec::new(),
+                raw_content: String::from("Content here"),
+                created_at: chrono::Utc::now(),
+            },
+        ];
+
+        let results = app.search_all("authentication").await;
+
+        std::assert_eq!(results.len(), 1);
+        match &results[0] {
+            SearchResultType::PRD { title, .. } => {
+                std::assert_eq!(title, "User Authentication Feature");
+            }
+            _ => std::panic!("Expected PRD search result"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_search_all_substring_matching_for_projects() {
+        // Test: Validates that projects are found using substring matching.
+        // Justification: Projects use substring search on name.
+        let mut app = App::new();
+
+        app.projects = vec![
+            task_manager::domain::project::Project {
+                id: String::from("proj-1"),
+                name: String::from("E-Commerce Platform"),
+                description: None,
+                created_at: chrono::Utc::now(),
+                prd_ids: Vec::new(),
+            },
+        ];
+
+        let results = app.search_all("commerce").await;
+
+        std::assert_eq!(results.len(), 1);
+        match &results[0] {
+            SearchResultType::Project { name, .. } => {
+                std::assert_eq!(name, "E-Commerce Platform");
+            }
+            _ => std::panic!("Expected Project search result"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_search_all_no_adapters_uses_substring() {
+        // Test: Validates substring search for artifacts when no adapters configured.
+        // Justification: Ensures search works on systems without semantic capabilities.
+        let mut app = App::new();
+
+        app.artifacts = vec![
+            task_manager::domain::artifact::Artifact::new(
+                String::from("proj-1"),
+                String::from("src-1"),
+                task_manager::domain::artifact::ArtifactType::PRD,
+                String::from("Database schema design for users"),
+                vec![0.1; 384],
+                None,
+            ),
+        ];
+
+        // No adapters configured - should use substring fallback
+        app.artifact_adapter = None;
+        app.embedding_adapter = None;
+
+        let results = app.search_all("database").await;
+
+        std::assert_eq!(results.len(), 1);
+        match &results[0] {
+            SearchResultType::Artifact { content_preview, .. } => {
+                std::assert!(content_preview.contains("Database"));
+            }
+            _ => std::panic!("Expected Artifact from substring search"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_handle_spotlight_input_updates_results() {
+        // Test: Validates that spotlight input triggers search and updates results.
+        // Justification: Ensures interactive search works as user types.
+        let mut app = App::new();
+
+        app.tasks = vec![
+            task_manager::domain::task::Task {
+                id: String::from("task-1"),
+                title: String::from("Setup database"),
+                description: String::from("PostgreSQL configuration"),
+                status: task_manager::domain::task_status::TaskStatus::Todo,
+                agent_persona: None,
+                due_date: None,
+                source_transcript_id: None,
+                source_prd_id: None,
+                parent_task_id: None,
+                subtask_ids: Vec::new(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                enhancements: None,
+                comprehension_tests: None,
+                complexity: None,
+                reasoning: None,
+                completion_summary: None,
+                context_files: Vec::new(),
+                dependencies: Vec::new(),
+                sort_order: Some(0),
+            },
+        ];
+
+        std::assert_eq!(app.spotlight_query, "");
+        std::assert_eq!(app.spotlight_results.len(), 0);
+
+        app.handle_spotlight_input('d').await;
+        app.handle_spotlight_input('a').await;
+        app.handle_spotlight_input('t').await;
+        app.handle_spotlight_input('a').await;
+
+        std::assert_eq!(app.spotlight_query, "data");
+        std::assert_eq!(app.spotlight_results.len(), 1);
+        std::assert_eq!(app.spotlight_selected, 0);
+    }
+
+    #[tokio::test]
+    async fn test_handle_spotlight_backspace_updates_results() {
+        // Test: Validates that backspace updates search results correctly.
+        // Justification: Ensures users can refine searches by removing characters.
+        let mut app = App::new();
+
+        app.tasks = vec![
+            task_manager::domain::task::Task {
+                id: String::from("task-1"),
+                title: String::from("Authentication"),
+                description: String::from("Add OAuth2"),
+                status: task_manager::domain::task_status::TaskStatus::Todo,
+                agent_persona: None,
+                due_date: None,
+                source_transcript_id: None,
+                source_prd_id: None,
+                parent_task_id: None,
+                subtask_ids: Vec::new(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                enhancements: None,
+                comprehension_tests: None,
+                complexity: None,
+                reasoning: None,
+                completion_summary: None,
+                context_files: Vec::new(),
+                dependencies: Vec::new(),
+                sort_order: Some(0),
+            },
+            task_manager::domain::task::Task {
+                id: String::from("task-2"),
+                title: String::from("Authorization"),
+                description: String::from("Add RBAC"),
+                status: task_manager::domain::task_status::TaskStatus::Todo,
+                agent_persona: None,
+                due_date: None,
+                source_transcript_id: None,
+                source_prd_id: None,
+                parent_task_id: None,
+                subtask_ids: Vec::new(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                enhancements: None,
+                comprehension_tests: None,
+                complexity: None,
+                reasoning: None,
+                completion_summary: None,
+                context_files: Vec::new(),
+                dependencies: Vec::new(),
+                sort_order: Some(0),
+            },
+        ];
+
+        // Type "authentication"
+        app.spotlight_query = String::from("authentication");
+        app.spotlight_results = app.search_all(&app.spotlight_query).await;
+        std::assert_eq!(app.spotlight_results.len(), 1);
+
+        // Backspace to "auth" - should match both tasks
+        app.spotlight_query = String::from("authen");
+        app.handle_spotlight_backspace().await;
+        app.handle_spotlight_backspace().await;
+
+        std::assert_eq!(app.spotlight_query, "auth");
+        std::assert_eq!(app.spotlight_results.len(), 2);
+        std::assert_eq!(app.spotlight_selected, 0);
+    }
+
+    #[tokio::test]
+    async fn test_search_all_empty_query_returns_empty() {
+        // Test: Validates that empty query returns no results.
+        // Justification: Prevents showing all items when search is cleared.
+        let mut app = App::new();
+
+        app.tasks = vec![
+            task_manager::domain::task::Task {
+                id: String::from("task-1"),
+                title: String::from("Test"),
+                description: String::from("Test"),
+                status: task_manager::domain::task_status::TaskStatus::Todo,
+                agent_persona: None,
+                due_date: None,
+                source_transcript_id: None,
+                source_prd_id: None,
+                parent_task_id: None,
+                subtask_ids: Vec::new(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                enhancements: None,
+                comprehension_tests: None,
+                complexity: None,
+                reasoning: None,
+                completion_summary: None,
+                context_files: Vec::new(),
+                dependencies: Vec::new(),
+                sort_order: Some(0),
+            },
+        ];
+
+        let results = app.search_all("").await;
+        std::assert_eq!(results.len(), 0);
     }
 }

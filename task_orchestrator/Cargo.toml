@@ -5,6 +5,7 @@
 # It starts as a minimal library and will evolve over Phases 3–7 of TASK_PLAN_3.
 #
 # Revision History
+# - 2025-11-30T19:45:00Z @AI: Add scraper crate for web crawler HTML parsing.
 # - 2025-11-18T10:15:00Z @AI: Replace `postgres_persistence` feature with `sqlite_persistence` per project direction.
 # - 2025-11-13T18:42:00Z @AI: Mark graph-flow as optional to fix feature mapping; crate tests pass.
 # - 2025-11-12T17:46:00Z @AI: Add optional graph-flow dependency and feature mapping graph_flow = ["dep:graph-flow"].
@@ -34,12 +35,18 @@ ollama-rs = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 reqwest = { workspace = true }
+regex = { workspace = true }
+base64 = { workspace = true }
 # Graph runtime (rs-graph-llm aka graph-flow) unified dependency
 graph-flow = { workspace = true }
 # SQLite persistence via sqlx (metrics collection and optional task persistence)
 sqlx = { workspace = true }
 # Futures for streaming
 futures = "0.3"
+# PDF text extraction for Phase 6 media processing
+pdf-extract = { workspace = true }
+# HTML parsing for web crawler
+scraper = { workspace = true }
 
 # NOTE: Graph framework dependencies to be added in Phase 6–7 after resolution via Context7 MCP.
 # rs-graph-llm = "0.1.0"

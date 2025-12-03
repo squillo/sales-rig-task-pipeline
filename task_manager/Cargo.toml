@@ -5,6 +5,7 @@
 # transcript_extractor for the ActionItem type used in task conversion.
 #
 # Revision History
+# - 2025-11-30T19:15:00Z @AI: Add ignore crate for gitignore-aware directory scanning.
 # - 2025-11-08T08:40:00Z @AI: Add serde_json workspace dependency for tolerant parser utils.
 # - 2025-11-06T19:16:00Z @AI: Initial crate created from transcript_processor split.
 
@@ -27,3 +28,6 @@ uuid = { workspace = true }
 parking_lot = { workspace = true }
 chrono = { workspace = true }
 sqlx = { workspace = true }
+async-trait = { workspace = true }
+# Directory scanning with gitignore support
+ignore = { workspace = true }

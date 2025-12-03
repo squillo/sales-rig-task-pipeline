@@ -5,6 +5,8 @@
 //! links back to the source transcript for traceability.
 //!
 //! Revision History
+//! - 2025-11-30T21:30:00Z @AI: Add sort_order field for manual task prioritization within TODO column. Lower values appear first, None values sort by created_at.
+//! - 2025-11-29T15:00:00Z @AI: Rename assignee to agent_persona for better LLM inference. Field name "assignee" caused LLMs to default to placeholder human names (Alice, Bob, Charlie). New name primes LLM to produce role-based outputs (Backend Architect, Security Analyst, etc.).
 //! - 2025-11-26T09:45:00Z @AI: Add completion_summary field to store LLM's summary when task is completed.
 //! - 2025-11-24T08:45:00Z @AI: Add description field for detailed task information (Phase 8 prerequisite).
 //! - 2025-11-23T15:15:00Z @AI: Add intelligence fields (complexity, reasoning, context_files, dependencies) for Phase 2 Sprint 4.
@@ -25,7 +27,7 @@
 /// * `id` - Unique identifier (UUID) for this task.
 /// * `title` - The task's title or short summary.
 /// * `description` - Detailed description of the task.
-/// * `assignee` - Optional person responsible for completing the task.
+/// * `agent_persona` - Optional agent persona/role responsible for completing the task.
 /// * `due_date` - Optional deadline in string format.
 /// * `status` - Current lifecycle status of the task.
 /// * `source_transcript_id` - Optional link to the originating transcript.
@@ -47,7 +49,7 @@
 /// # use transcript_extractor::domain::action_item::ActionItem;
 /// let action = ActionItem {
 ///     title: std::string::String::from("Review code"),
-///     assignee: Some(std::string::String::from("Alice")),
+///     assignee: Some(std::string::String::from("Backend Developer")),
 ///     due_date: None,
 /// };
 ///
@@ -65,8 +67,8 @@ pub struct Task {
     /// Detailed description of the task.
     pub description: String,
 
-    /// The person assigned to complete this task.
-    pub assignee: Option<String>,
+    /// The agent persona/role assigned to complete this task.
+    pub agent_persona: Option<String>,
 
     /// The deadline for this task in string format.
     pub due_date: Option<String>,
@@ -112,6 +114,10 @@ pub struct Task {
 
     /// List of task IDs this task depends on.
     pub dependencies: std::vec::Vec<String>,
+
+    /// Optional sort order for manual prioritization within TODO column.
+    /// Lower values appear first. Tasks without sort_order use created_at for ordering.
+    pub sort_order: std::option::Option<i32>,
 }
 
 impl Task {
@@ -154,7 +160,7 @@ impl Task {
             id: uuid::Uuid::new_v4().to_string(),
             title: action.title.clone(),
             description: String::new(),
-            assignee: action.assignee.clone(),
+            agent_persona: action.assignee.clone(),
             due_date: action.due_date.clone(),
             status: crate::domain::task_status::TaskStatus::Todo,
             source_transcript_id: transcript_id,
@@ -170,6 +176,7 @@ impl Task {
             completion_summary: std::option::Option::None,
             context_files: std::vec::Vec::new(),
             dependencies: std::vec::Vec::new(),
+            sort_order: std::option::Option::None,
         }
     }
 }
@@ -193,7 +200,7 @@ mod tests {
 
         assert!(!task.id.is_empty());
         assert_eq!(task.title, "Test action");
-        assert_eq!(task.assignee, Some(std::string::String::from("Bob")));
+        assert_eq!(task.agent_persona, Some(std::string::String::from("Bob")));
         assert_eq!(task.due_date, Some(std::string::String::from("2025-11-30")));
         assert_eq!(task.status, crate::domain::task_status::TaskStatus::Todo);
         assert_eq!(task.source_transcript_id, Some(std::string::String::from("transcript-456")));
@@ -215,7 +222,7 @@ mod tests {
 
         assert!(!task.id.is_empty());
         assert_eq!(task.title, "Minimal task");
-        assert!(task.assignee.is_none());
+        assert!(task.agent_persona.is_none());
         assert!(task.due_date.is_none());
         assert!(task.source_transcript_id.is_none());
     }

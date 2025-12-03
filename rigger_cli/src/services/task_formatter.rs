@@ -62,7 +62,7 @@ pub fn format_task_as_markdown(task: &task_manager::domain::task::Task) -> Strin
     output.push_str(&std::format!("**ID:** `{}`\n", task.id));
     output.push_str(&std::format!("**Status:** {}\n", format_status(&task.status)));
 
-    if let std::option::Option::Some(ref assignee) = task.assignee {
+    if let std::option::Option::Some(ref assignee) = task.agent_persona {
         output.push_str(&std::format!("**Assignee:** {}\n", assignee));
     }
 
@@ -114,7 +114,7 @@ pub fn format_task_as_plain_text(task: &task_manager::domain::task::Task) -> Str
     output.push_str(&std::format!("ID: {}\n", task.id));
     output.push_str(&std::format!("Status: {}\n", format_status(&task.status)));
 
-    if let std::option::Option::Some(ref assignee) = task.assignee {
+    if let std::option::Option::Some(ref assignee) = task.agent_persona {
         output.push_str(&std::format!("Assignee: {}\n", assignee));
     }
 
@@ -156,7 +156,7 @@ mod tests {
             id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
             title: "Implement clipboard support".to_string(),
             description: "Add copy/paste functionality to the TUI".to_string(),
-            assignee: std::option::Option::Some("Alice".to_string()),
+            agent_persona: std::option::Option::Some("Backend Developer".to_string()),
             due_date: std::option::Option::None,
             status: task_manager::domain::task_status::TaskStatus::InProgress,
             source_transcript_id: std::option::Option::None,
@@ -169,9 +169,10 @@ mod tests {
             comprehension_tests: std::option::Option::None,
             complexity: std::option::Option::Some(5),
             reasoning: std::option::Option::Some("Add copy/paste functionality to the TUI".to_string()),
+            completion_summary: std::option::Option::None,
             context_files: std::vec![],
             dependencies: std::vec!["task-123".to_string()],
-            completion_summary: std::option::Option::None,
+            sort_order: std::option::Option::Some(0),
         }
     }
 
@@ -212,7 +213,7 @@ mod tests {
         let task = create_test_task();
         let markdown = format_task_as_markdown(&task);
 
-        std::assert!(markdown.contains("**Assignee:** Alice"));
+        std::assert!(markdown.contains("**Assignee:** Backend Developer"));
     }
 
     #[test]
@@ -255,7 +256,7 @@ mod tests {
             id: "minimal-123".to_string(),
             title: "Minimal task".to_string(),
             description: String::new(),
-            assignee: std::option::Option::None,
+            agent_persona: std::option::Option::None,
             due_date: std::option::Option::None,
             status: task_manager::domain::task_status::TaskStatus::Todo,
             source_transcript_id: std::option::Option::None,
@@ -271,6 +272,7 @@ mod tests {
             context_files: std::vec![],
             dependencies: std::vec![],
             completion_summary: std::option::Option::None,
+            sort_order: std::option::Option::Some(0),
         };
 
         let markdown = format_task_as_markdown(&task);

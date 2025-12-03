@@ -5,6 +5,8 @@
 //! Repository and QueryRepository traits to provide type-safe persistence operations.
 //!
 //! Revision History
+//! - 2025-11-30T21:30:00Z @AI: Add SortOrder sort key for manual task prioritization within TODO column.
+//! - 2025-11-29T15:30:00Z @AI: Rename ByAssignee filter variant to ByAgentPersona for better LLM inference alignment.
 //! - 2025-11-06T18:14:00Z @AI: Refactor to use HEXSER Repository pattern with filters and sort keys.
 //! - 2025-11-06T17:41:00Z @AI: Initial TaskRepositoryPort trait definition.
 
@@ -21,8 +23,8 @@ pub enum TaskFilter {
     /// Filter by task status.
     ByStatus(crate::domain::task_status::TaskStatus),
 
-    /// Filter by assignee name.
-    ByAssignee(String),
+    /// Filter by assignee persona/role.
+    ByAgentPersona(String),
 
     /// Return all tasks (no filtering).
     All,
@@ -49,6 +51,9 @@ pub enum TaskSortKey {
 
     /// Sort by due date (if present).
     DueDate,
+
+    /// Sort by manual sort order (for TODO column prioritization).
+    SortOrder,
 }
 
 /// Port (interface) for task persistence and retrieval operations.

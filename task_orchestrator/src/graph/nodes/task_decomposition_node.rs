@@ -177,7 +177,7 @@ mod tests {
                 .map(|title| {
                     let action = transcript_extractor::domain::action_item::ActionItem {
                         title,
-                        assignee: task.assignee.clone(),
+                        assignee: task.agent_persona.clone(),
                         due_date: task.due_date.clone(),
                     };
                     let mut subtask = task_manager::domain::task::Task::from_action_item(&action, std::option::Option::None);
@@ -251,7 +251,7 @@ mod tests {
 
         let action = transcript_extractor::domain::action_item::ActionItem {
             title: std::string::String::from("Complex task"),
-            assignee: std::option::Option::Some(std::string::String::from("Bob")),
+            assignee: std::option::Option::Some(std::string::String::from("QA Engineer")),
             due_date: std::option::Option::Some(std::string::String::from("2025-12-31")),
         };
         let task = task_manager::domain::task::Task::from_action_item(&action, std::option::Option::None);
@@ -262,9 +262,9 @@ mod tests {
         let subtasks = result.subtasks.unwrap();
         for subtask in &subtasks {
             std::assert_eq!(
-                subtask.assignee,
-                std::option::Option::Some(std::string::String::from("Bob")),
-                "Subtasks should inherit parent assignee"
+                subtask.agent_persona,
+                std::option::Option::Some(std::string::String::from("QA Engineer")),
+                "Subtasks should inherit parent agent_persona"
             );
             std::assert_eq!(
                 subtask.due_date,

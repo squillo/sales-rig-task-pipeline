@@ -4,6 +4,8 @@
 //! subcommands into separate modules for maintainability.
 //!
 //! Revision History
+//! - 2025-11-30T21:30:00Z @AI: Add artifacts generate command for Phase 5 artifact generator.
+//! - 2025-11-28T23:00:00Z @AI: Add artifacts command for Phase 6 RAG CLI (Tasks 6.1, 6.2).
 //! - 2025-11-22T16:30:00Z @AI: Initial command structure for Rigger CLI.
 
 pub mod init;
@@ -13,6 +15,7 @@ pub mod do_task;
 pub mod server;
 pub mod grpc_server;
 pub mod tui;
+pub mod artifacts;
 
 /// Rig CLI - AI-driven project management for agents.
 #[derive(clap::Parser)]
@@ -82,4 +85,77 @@ pub enum Commands {
 
     /// Launch interactive TUI (Terminal User Interface)
     Tui,
+
+    /// Manage knowledge artifacts (RAG knowledge base)
+    Artifacts {
+        #[command(subcommand)]
+        command: ArtifactsCommands,
+    },
+}
+
+/// Subcommands for artifacts management.
+#[derive(clap::Subcommand)]
+pub enum ArtifactsCommands {
+    /// List all artifacts with optional filtering
+    List {
+        /// Filter by project ID
+        #[arg(long)]
+        project: std::option::Option<String>,
+
+        /// Filter by source type (prd, file, web_research, user_input)
+        #[arg(long)]
+        source_type: std::option::Option<String>,
+
+        /// Limit number of results (default: 20)
+        #[arg(long)]
+        limit: std::option::Option<String>,
+    },
+
+    /// Search artifacts using semantic similarity
+    Search {
+        /// Search query (natural language)
+        query: String,
+
+        /// Maximum number of results (default: 5)
+        #[arg(long)]
+        limit: std::option::Option<String>,
+
+        /// Minimum similarity threshold 0.0-1.0 (default: 0.5)
+        #[arg(long)]
+        threshold: std::option::Option<String>,
+
+        /// Filter by project ID
+        #[arg(long)]
+        project: std::option::Option<String>,
+    },
+
+    /// Generate artifacts from a directory or website
+    Generate {
+        /// Source path (directory) or URL (website) to generate artifacts from
+        source: String,
+
+        /// Project ID to associate artifacts with (default: directory name or domain)
+        #[arg(long)]
+        project: std::option::Option<String>,
+
+        /// Maximum recursion depth for directories/crawling (default: 10)
+        #[arg(long)]
+        depth: std::option::Option<String>,
+
+        /// Maximum number of files/pages to process (default: 1000)
+        #[arg(long)]
+        max_items: std::option::Option<String>,
+
+        /// Chunking strategy: paragraph, sentence, fixed_size, whole_file (default: paragraph)
+        #[arg(long)]
+        chunk_strategy: std::option::Option<String>,
+
+        /// Maximum chunk size in characters for fixed_size strategy (default: 1000)
+        #[arg(long)]
+        chunk_size: std::option::Option<String>,
+
+        /// Additional glob patterns to exclude (comma-separated)
+        #[arg(long)]
+        exclude: std::option::Option<String>,
+    },
 }
