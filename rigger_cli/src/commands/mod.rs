@@ -4,6 +4,7 @@
 //! subcommands into separate modules for maintainability.
 //!
 //! Revision History
+//! - 2025-12-04T00:00:00Z @AI: Add config command for Phase 4.3 config management CLI.
 //! - 2025-11-30T21:30:00Z @AI: Add artifacts generate command for Phase 5 artifact generator.
 //! - 2025-11-28T23:00:00Z @AI: Add artifacts command for Phase 6 RAG CLI (Tasks 6.1, 6.2).
 //! - 2025-11-22T16:30:00Z @AI: Initial command structure for Rigger CLI.
@@ -16,6 +17,7 @@ pub mod server;
 pub mod grpc_server;
 pub mod tui;
 pub mod artifacts;
+pub mod config;
 
 /// Rig CLI - AI-driven project management for agents.
 #[derive(clap::Parser)]
@@ -91,6 +93,12 @@ pub enum Commands {
         #[command(subcommand)]
         command: ArtifactsCommands,
     },
+
+    /// Manage configuration (view, validate, edit, migrate)
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommands,
+    },
 }
 
 /// Subcommands for artifacts management.
@@ -157,5 +165,41 @@ pub enum ArtifactsCommands {
         /// Additional glob patterns to exclude (comma-separated)
         #[arg(long)]
         exclude: std::option::Option<String>,
+    },
+}
+
+/// Subcommands for configuration management.
+#[derive(clap::Subcommand)]
+pub enum ConfigCommands {
+    /// Display current configuration with syntax highlighting
+    Show {
+        /// Path to config file (default: .rigger/config.json or ~/.config/rigger/config.json)
+        #[arg(long)]
+        path: std::option::Option<String>,
+    },
+
+    /// Validate configuration and show any errors
+    Validate {
+        /// Path to config file (default: .rigger/config.json or ~/.config/rigger/config.json)
+        #[arg(long)]
+        path: std::option::Option<String>,
+    },
+
+    /// Open configuration in TUI editor
+    Edit,
+
+    /// Migrate configuration from legacy format to v3.0
+    Migrate {
+        /// Path to legacy config file (default: .rigger/config.json)
+        #[arg(long)]
+        path: std::option::Option<String>,
+
+        /// Output path for migrated config (default: overwrites input)
+        #[arg(long)]
+        output: std::option::Option<String>,
+
+        /// Create backup before migration (default: true)
+        #[arg(long, default_value = "true")]
+        backup: bool,
     },
 }

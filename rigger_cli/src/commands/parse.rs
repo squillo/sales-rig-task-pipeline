@@ -4,6 +4,7 @@
 //! Ingests PRD content into RAG knowledge base with vector embeddings for semantic search.
 //!
 //! Revision History
+//! - 2025-12-04T00:00:00Z @AI: Update to use rigger_core config and read from task slots (Phase 4.4).
 //! - 2025-11-28T20:45:00Z @AI: Add RAG artifact ingestion after task generation (Phase 3 Task 4.2).
 //! - 2025-11-27T09:00:00Z @AI: Add auto-decomposition for complex tasks. After saving generated tasks, iterate through them and auto-decompose any with complexity >= 7. For each complex task: (1) call parser.decompose_task() to generate 3-5 sub-tasks, (2) save sub-tasks to database, (3) update parent task with subtask_ids and Decomposed status. Provides progress feedback ("🔄 Decomposing complex task...") and summary stats. Decomposition failures are non-fatal - logs warning and continues with original task.
 //! - 2025-11-25T20:47:00Z @AI: Fix "runtime within runtime" error by using save_async() instead of blocking save().
@@ -62,21 +63,22 @@ pub async fn execute(prd_file: &str) -> anyhow::Result<()> {
     println!("  Constraints: {}", prd.constraints.len());
     println!();
 
-    // Read config to determine provider
+    // Read config using rigger_core (with auto-migration)
     let config_path = taskmaster_dir.join("config.json");
-    let config_content = std::fs::read_to_string(&config_path)
-        .map_err(|e| anyhow::anyhow!("Failed to read config.json: {}", e))?;
-    let config: serde_json::Value = serde_json::from_str(&config_content)?;
+    let config = rigger_core::RiggerConfig::load_with_migration(
+        config_path.to_str().ok_or_else(|| anyhow::anyhow!("Invalid config path"))?
+    )?;
 
-    let provider = config["provider"]
-        .as_str()
-        .unwrap_or("ollama");
+    // Get main task slot configuration
+    let main_slot = &config.task_slots.main;
+    let main_provider = config.providers.get(&main_slot.provider)
+        .ok_or_else(|| anyhow::anyhow!("Provider '{}' not found in config", main_slot.provider))?;
 
-    let model_name = config["model"]["main"]
-        .as_str()
-        .unwrap_or("llama3.2:latest");
-
-    println!("Generating tasks using {} with {}...", provider, model_name);
+    println!("Generating tasks using {} ({}) with {}...",
+        main_slot.provider,
+        main_provider.base_url,
+        main_slot.model
+    );
 
     // Define database paths early for persona queries
     let db_path = taskmaster_dir.join("tasks.db");
@@ -88,61 +90,53 @@ pub async fn execute(prd_file: &str) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("Failed to connect to database: {}", e))?;
 
     // Create PRD parser adapter based on provider
-    let tasks = match provider {
-        "ollama" => {
-            use task_orchestrator::ports::prd_parser_port::PRDParserPort;
+    use task_orchestrator::ports::prd_parser_port::PRDParserPort;
 
-            // Query personas from database for task assignment
-            let persona_rows = sqlx::query("SELECT id, project_id, name, role, description, llm_provider, llm_model, is_default, created_at, updated_at FROM personas")
-                .fetch_all(adapter.pool())
-                .await
-                .map_err(|e| anyhow::anyhow!("Failed to query personas: {}", e))?;
+    // Query personas from database for task assignment
+    let persona_rows = sqlx::query("SELECT id, project_id, name, role, description, llm_provider, llm_model, is_default, created_at, updated_at FROM personas")
+        .fetch_all(adapter.pool())
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to query personas: {}", e))?;
 
-            let mut personas = std::vec::Vec::new();
-            for row in persona_rows {
-                use sqlx::Row;
-                let persona = task_manager::domain::persona::Persona {
-                    id: row.get(0),
-                    project_id: row.get(1),
-                    name: row.get(2),
-                    role: row.get(3),
-                    description: row.get(4),
-                    llm_provider: row.get(5),
-                    llm_model: row.get(6),
-                    is_default: row.get(7),
-                    created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<String, _>(8))
-                        .map_err(|e| anyhow::anyhow!("Invalid created_at timestamp: {}", e))?
-                        .with_timezone(&chrono::Utc),
-                    updated_at: chrono::DateTime::parse_from_rfc3339(&row.get::<String, _>(9))
-                        .map_err(|e| anyhow::anyhow!("Invalid updated_at timestamp: {}", e))?
-                        .with_timezone(&chrono::Utc),
-                    enabled_tools: std::vec::Vec::new(), // Will be populated from persona_tools if needed
-                };
-                personas.push(persona);
-            }
+    let mut personas = std::vec::Vec::new();
+    for row in persona_rows {
+        use sqlx::Row;
+        let persona = task_manager::domain::persona::Persona {
+            id: row.get(0),
+            project_id: row.get(1),
+            name: row.get(2),
+            role: row.get(3),
+            description: row.get(4),
+            llm_provider: row.get(5),
+            llm_model: row.get(6),
+            is_default: row.get(7),
+            created_at: chrono::DateTime::parse_from_rfc3339(&row.get::<String, _>(8))
+                .map_err(|e| anyhow::anyhow!("Invalid created_at timestamp: {}", e))?
+                .with_timezone(&chrono::Utc),
+            updated_at: chrono::DateTime::parse_from_rfc3339(&row.get::<String, _>(9))
+                .map_err(|e| anyhow::anyhow!("Invalid updated_at timestamp: {}", e))?
+                .with_timezone(&chrono::Utc),
+            enabled_tools: std::vec::Vec::new(), // Will be populated from persona_tools if needed
+        };
+        personas.push(persona);
+    }
 
-            eprintln!("[PRD Parser] Loaded {} personas for task assignment", personas.len());
+    eprintln!("[PRD Parser] Loaded {} personas for task assignment", personas.len());
 
-            // Extract fallback model from config
-            let fallback_model = config["task_tools"]["fallback"]["model"]
-                .as_str()
-                .unwrap_or(model_name);
+    // Get fallback slot configuration
+    let fallback_slot = &config.task_slots.fallback;
 
-            let parser = task_orchestrator::adapters::rig_prd_parser_adapter::RigPRDParserAdapter::new(
-                model_name.to_string(),
-                fallback_model.to_string(),
-                personas
-            );
+    // Create parser with main and fallback models from config
+    let parser = task_orchestrator::adapters::rig_prd_parser_adapter::RigPRDParserAdapter::new(
+        main_slot.model.clone(),
+        fallback_slot.model.clone(),
+        personas
+    );
 
-            parser
-                .parse_prd_to_tasks(&prd)
-                .await
-                .map_err(|e| anyhow::anyhow!("Task generation failed: {}", e))?
-        }
-        other => {
-            anyhow::bail!("Unsupported provider: '{}'. Currently only 'ollama' is supported.", other);
-        }
-    };
+    let tasks = parser
+        .parse_prd_to_tasks(&prd)
+        .await
+        .map_err(|e| anyhow::anyhow!("Task generation failed: {}", e))?;
 
     println!("✓ Generated {} tasks", tasks.len());
     println!();
@@ -157,7 +151,7 @@ pub async fn execute(prd_file: &str) -> anyhow::Result<()> {
 
     // Ingest PRD content as artifacts for RAG
     println!("📚 Ingesting PRD content for semantic search...");
-    match ingest_prd_artifacts(&prd, &prd_content, &db_url, provider, model_name).await {
+    match ingest_prd_artifacts(&prd, &prd_content, &db_url, &main_slot.provider, &main_slot.model).await {
         std::result::Result::Ok(artifact_count) => {
             println!("✓ Ingested {} knowledge artifacts with embeddings", artifact_count);
             println!();
@@ -176,14 +170,14 @@ pub async fn execute(prd_file: &str) -> anyhow::Result<()> {
             if complexity >= 7 {
                 println!("🔄 Decomposing complex task (complexity {}): {}", complexity, task.title);
 
-                // Recreate parser for decomposition (needs same config)
-                let parser = task_orchestrator::adapters::rig_prd_parser_adapter::RigPRDParserAdapter::new(
-                    model_name.to_string(),
-                    config["task_tools"]["fallback"]["model"].as_str().unwrap_or(model_name).to_string(),
+                // Recreate parser for decomposition (using same models from config)
+                let decompose_parser = task_orchestrator::adapters::rig_prd_parser_adapter::RigPRDParserAdapter::new(
+                    main_slot.model.clone(),
+                    fallback_slot.model.clone(),
                     std::vec::Vec::new() // Personas already validated in original tasks
                 );
 
-                match parser.decompose_task(task, &prd_content).await {
+                match decompose_parser.decompose_task(task, &prd_content).await {
                     std::result::Result::Ok(subtasks) => {
                         println!("  ✓ Generated {} sub-tasks", subtasks.len());
 

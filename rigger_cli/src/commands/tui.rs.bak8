@@ -1709,7 +1709,7 @@ impl App {
 
             for task in &self.prd_view_tasks {
                 // Save to database
-                if let std::result::Result::Err(e) = adapter.save_async(task.clone()).await {
+                if let std::result::Result::Err(e) = adapter.lock().unwrap().save_async(task.clone()).await {
                     save_errors.push(std::format!("Failed to save task sort_order: {}", e));
                 }
 
@@ -4054,7 +4054,7 @@ impl App {
         // Persist to database
         if let std::option::Option::Some(adapter) = &self.db_adapter {
             self.is_saving = true;
-            let save_result = adapter.save_async(task.clone()).await.map_err(|e| {
+            let save_result = adapter.lock().unwrap().save_async(task.clone()).await.map_err(|e| {
                 anyhow::anyhow!("Failed to save task status: {:?}", e)
             });
             self.is_saving = false;
@@ -4388,7 +4388,7 @@ impl App {
             let task_clone = task.clone();
             let task_title = task.title.clone(); // Clone title for notification
 
-            match adapter.save_async(task_clone).await {
+            match adapter.lock().unwrap().save_async(task_clone).await {
                 std::result::Result::Ok(_) => {
                     self.last_saved_at = std::option::Option::Some(chrono::Utc::now());
                     self.has_unsaved_changes = false;
@@ -4437,24 +4437,40 @@ impl App {
                 config_path.to_str().unwrap_or(".rigger/config.json")
             );
 
-            // TODO Phase 2.2: Instantiate tools for LLM agent
-            // Tools are implemented and adapter wiring is complete, but we need to refactor
-            // App struct to store adapters as Arc<Mutex<Adapter>> instead of plain Adapter
-            // so they can be cloned and shared with tools. Currently SqliteTaskAdapter and
-            // SqliteArtifactAdapter don't implement Clone.
-            //
-            // Next steps:
-            // 1. Change db_adapter type to Arc<Mutex<SqliteTaskAdapter>>
-            // 2. Change artifact_adapter type to Arc<Mutex<SqliteArtifactAdapter>>
-            // 3. Update all adapter initialization and usage sites
-            // 4. Create tool instances here and pass to adapter
-            //
-            // For now, agent will work without tools (can still chat, but can't search/query)
-            let (search_artifacts_tool, search_tasks_tool, get_task_details_tool) = (
-                std::option::Option::None,
-                std::option::Option::None,
-                std::option::Option::None,
-            );
+            // Instantiate tools for LLM agent (Phase 2: Tool Calling) - NOW WORKING!
+            let (search_artifacts_tool, search_tasks_tool, get_task_details_tool) = {
+                // Create tools if adapters are available
+                let search_artifacts = if let (std::option::Option::Some(embedding_adapter), std::option::Option::Some(artifact_adapter)) =
+                    (self.embedding_adapter.clone(), self.artifact_adapter.clone())
+                {
+                    std::option::Option::Some(task_orchestrator::tools::SearchArtifactsTool::new(
+                        embedding_adapter,
+                        artifact_adapter,
+                        self.selected_project_id.clone(),
+                    ))
+                } else {
+                    std::option::Option::None
+                };
+
+                let search_tasks = if let std::option::Option::Some(db_adapter) = self.db_adapter.clone() {
+                    std::option::Option::Some(task_orchestrator::tools::SearchTasksTool::new(
+                        db_adapter.clone(),
+                        self.selected_project_id.clone(),
+                    ))
+                } else {
+                    std::option::Option::None
+                };
+
+                let get_task_details = if let std::option::Option::Some(db_adapter) = self.db_adapter.clone() {
+                    std::option::Option::Some(task_orchestrator::tools::GetTaskDetailsTool::new(
+                        db_adapter,
+                    ))
+                } else {
+                    std::option::Option::None
+                };
+
+                (search_artifacts, search_tasks, get_task_details)
+            };
 
             let adapter = match config {
                 std::result::Result::Ok(cfg) => {
@@ -5268,7 +5284,7 @@ impl App {
             let task_clone = new_task.clone();
             let task_title = new_task.title.clone();
 
-            match adapter.save_async(task_clone).await {
+            match adapter.lock().unwrap().save_async(task_clone).await {
                 std::result::Result::Ok(_) => {
                     self.last_saved_at = std::option::Option::Some(chrono::Utc::now());
                     self.is_saving = false;
@@ -5485,7 +5501,7 @@ impl App {
 
         // Search artifacts using vector database (filtered by project)
         if let Some(artifact_adapter) = &self.artifact_adapter {
-            if let std::result::Result::Ok(similar_artifacts) = artifact_adapter.search_similar(&query_emb, 30, 0.8).await {
+            if let std::result::Result::Ok(similar_artifacts) = artifact_adapter.lock().unwrap().search_similar(&query_emb, 30, 0.8).await {
                 for (artifact, distance) in similar_artifacts {
                     // Filter by project if one is selected
                     if let std::option::Option::Some(ref project_id) = self.selected_project_id {
@@ -5618,7 +5634,7 @@ impl App {
         if let Some(ref query_emb) = query_embedding {
             if let Some(artifact_adapter) = &self.artifact_adapter {
                 // Use already-generated query embedding for artifact search
-                if let std::result::Result::Ok(similar_artifacts) = artifact_adapter.search_similar(query_emb, 30, 0.8).await {
+                if let std::result::Result::Ok(similar_artifacts) = artifact_adapter.lock().unwrap().search_similar(query_emb, 30, 0.8).await {
                     for (artifact, distance) in similar_artifacts {
                         // Convert distance to similarity: distance 0.0 (identical) -> similarity 1.0 (100%)
                         // distance 2.0 (opposite) -> similarity 0.0 (0%)
@@ -5994,7 +6010,7 @@ impl App {
                             let task_clone = task.clone();
                             let task_title = task.title.clone();
 
-                            match adapter.save_async(task_clone).await {
+                            match adapter.lock().unwrap().save_async(task_clone).await {
                                 std::result::Result::Ok(_) => {
                                     self.add_notification(
                                         NotificationLevel::Success,
@@ -6345,7 +6361,7 @@ impl App {
         if let std::option::Option::Some(ref adapter) = self.db_adapter {
             for task in &self.tasks {
                 if task.id == current_id || task.id == prev_id {
-                    if let std::result::Result::Err(e) = adapter.save_async(task.clone()).await {
+                    if let std::result::Result::Err(e) = adapter.lock().unwrap().save_async(task.clone()).await {
                         return std::result::Result::Err(std::format!("Failed to save task: {}", e));
                     }
                 }
@@ -6400,7 +6416,7 @@ impl App {
         if let std::option::Option::Some(ref adapter) = self.db_adapter {
             for task in &self.tasks {
                 if task.id == current_id || task.id == next_id {
-                    if let std::result::Result::Err(e) = adapter.save_async(task.clone()).await {
+                    if let std::result::Result::Err(e) = adapter.lock().unwrap().save_async(task.clone()).await {
                         return std::result::Result::Err(std::format!("Failed to save task: {}", e));
                     }
                 }
@@ -6458,7 +6474,7 @@ impl App {
         if let std::option::Option::Some(ref adapter) = self.db_adapter {
             for task in &self.prd_view_tasks {
                 if task.id == current_id || task.id == prev_id {
-                    if let std::result::Result::Err(e) = adapter.save_async(task.clone()).await {
+                    if let std::result::Result::Err(e) = adapter.lock().unwrap().save_async(task.clone()).await {
                         return std::result::Result::Err(std::format!("Failed to save task: {}", e));
                     }
                 }
@@ -6519,7 +6535,7 @@ impl App {
         if let std::option::Option::Some(ref adapter) = self.db_adapter {
             for task in &self.prd_view_tasks {
                 if task.id == current_id || task.id == next_id {
-                    if let std::result::Result::Err(e) = adapter.save_async(task.clone()).await {
+                    if let std::result::Result::Err(e) = adapter.lock().unwrap().save_async(task.clone()).await {
                         return std::result::Result::Err(std::format!("Failed to save task: {}", e));
                     }
                 }

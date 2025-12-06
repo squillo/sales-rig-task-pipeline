@@ -3660,7 +3660,7 @@ impl App {
                                     match embedding_adapter.generate_embedding(&task_text).await {
                                         std::result::Result::Ok(query_embedding) => {
                                             // Search for similar artifacts (top 5)
-                                            match artifact_adapter.search_similar(&query_embedding, 5, 0.3).await {
+                                            match artifact_adapter.lock().expect("Failed to lock artifact adapter").search_similar(&query_embedding, 5, 0.3).await {
                                                 std::result::Result::Ok(similar_artifacts) => {
                                                     if !similar_artifacts.is_empty() {
                                                         // Convert to (artifact_id, score) pairs
@@ -5485,7 +5485,7 @@ impl App {
 
         // Search artifacts using vector database (filtered by project)
         if let Some(artifact_adapter) = &self.artifact_adapter {
-            if let std::result::Result::Ok(similar_artifacts) = artifact_adapter.search_similar(&query_emb, 30, 0.8).await {
+            if let std::result::Result::Ok(similar_artifacts) = artifact_adapter.lock().expect("Failed to lock artifact adapter").search_similar(&query_emb, 30, 0.8).await {
                 for (artifact, distance) in similar_artifacts {
                     // Filter by project if one is selected
                     if let std::option::Option::Some(ref project_id) = self.selected_project_id {
@@ -5618,7 +5618,7 @@ impl App {
         if let Some(ref query_emb) = query_embedding {
             if let Some(artifact_adapter) = &self.artifact_adapter {
                 // Use already-generated query embedding for artifact search
-                if let std::result::Result::Ok(similar_artifacts) = artifact_adapter.search_similar(query_emb, 30, 0.8).await {
+                if let std::result::Result::Ok(similar_artifacts) = artifact_adapter.lock().expect("Failed to lock artifact adapter").search_similar(query_emb, 30, 0.8).await {
                     for (artifact, distance) in similar_artifacts {
                         // Convert distance to similarity: distance 0.0 (identical) -> similarity 1.0 (100%)
                         // distance 2.0 (opposite) -> similarity 0.0 (0%)

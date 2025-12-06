@@ -4,6 +4,7 @@
 //! and initializes the SQLite database for task storage.
 //!
 //! Revision History
+//! - 2025-12-04T20:00:00Z @AI: Update to generate rigger_core v3.0 config with full provider support.
 //! - 2025-11-23T14:30:00Z @AI: Rename taskmaster to rigger throughout codebase.
 //! - 2025-11-22T19:00:00Z @AI: Rename CLI command from 'taskmaster' to 'rig'; fix SQLite database file creation.
 //! - 2025-11-22T16:35:00Z @AI: Initial init command implementation for Rigger Phase 0 Sprint 0.2.
@@ -72,20 +73,82 @@ pub async fn execute() -> anyhow::Result<()> {
         println!("  and copy to .rigger/lib/vec0.dylib");
     }
 
-    // Create config.json
-    let config = serde_json::json!({
-        "provider": "ollama",
-        "model": {
-            "main": "llama3.2",
-            "research": "llama3.2",
-            "fallback": "llama3.2"
+    // Create config.json using rigger_core v3.0 format
+    let mut providers = std::collections::HashMap::new();
+
+    // Default to Ollama (no API key required)
+    providers.insert(
+        String::from("ollama"),
+        rigger_core::config::ProviderConfig {
+            provider_type: rigger_core::config::ProviderType::Ollama,
+            base_url: String::from("http://localhost:11434"),
+            api_key_env: None,
+            timeout_seconds: 120,
+            max_retries: 2,
+            default_model: String::from("llama3.2"),
         },
-        "database_url": "sqlite:.rigger/tasks.db"
-    });
+    );
+
+    // Create v3.0 config with Ollama as default for all slots
+    let config = rigger_core::RiggerConfig {
+        version: String::from("3.0"),
+        database: rigger_core::config::DatabaseConfig {
+            url: String::from("sqlite:.rigger/tasks.db"),
+            auto_vacuum: true,
+            pool_size: 5,
+        },
+        providers,
+        task_slots: rigger_core::config::TaskSlotConfig {
+            main: rigger_core::config::TaskSlot {
+                provider: String::from("ollama"),
+                model: String::from("llama3.2"),
+                enabled: true,
+                description: String::from("Primary task decomposition and generation"),
+                streaming: None,
+            },
+            research: rigger_core::config::TaskSlot {
+                provider: String::from("ollama"),
+                model: String::from("llama3.2"),
+                enabled: true,
+                description: String::from("Web and artifact research"),
+                streaming: None,
+            },
+            fallback: rigger_core::config::TaskSlot {
+                provider: String::from("ollama"),
+                model: String::from("llama3.2"),
+                enabled: true,
+                description: String::from("Fallback processing for errors"),
+                streaming: None,
+            },
+            embedding: rigger_core::config::TaskSlot {
+                provider: String::from("ollama"),
+                model: String::from("nomic-embed-text"),
+                enabled: true,
+                description: String::from("Semantic search and RAG embeddings"),
+                streaming: None,
+            },
+            vision: rigger_core::config::TaskSlot {
+                provider: String::from("ollama"),
+                model: String::from("llava:latest"),
+                enabled: true,
+                description: String::from("Image and PDF processing"),
+                streaming: None,
+            },
+            chat_agent: rigger_core::config::TaskSlot {
+                provider: String::from("ollama"),
+                model: String::from("llama3.2"),
+                enabled: true,
+                description: String::from("Interactive chat agent with tool calling"),
+                streaming: Some(true),
+            },
+        },
+        performance: rigger_core::config::PerformanceConfig::default(),
+        tui: rigger_core::config::TuiConfig::default(),
+    };
 
     let config_path = rigger_dir.join("config.json");
     std::fs::write(&config_path, serde_json::to_string_pretty(&config)?)?;
-    println!("✓ Created config.json");
+    println!("✓ Created config.json (v3.0 format)");
 
     // Initialize SQLite database
     let db_path = rigger_dir.join("tasks.db");
@@ -110,11 +173,15 @@ pub async fn execute() -> anyhow::Result<()> {
     println!("  1. Create a PRD markdown file (or use an existing one)");
     println!("  2. Run: rig parse <PRD_FILE>");
     println!("  3. View tasks: rig list");
-    println!("  4. Execute a task: rig do <TASK_ID>\n");
-    println!("Configuration:");
-    println!("  Provider: ollama");
-    println!("  Model: llama3.1");
-    println!("  Database: {}\n", db_path.display());
+    println!("  4. Execute a task: rig do <TASK_ID>");
+    println!("  5. Launch TUI: rig tui\n");
+    println!("Configuration (v3.0):");
+    println!("  Default provider: Ollama (http://localhost:11434)");
+    println!("  All task slots: llama3.2");
+    println!("  Embedding: nomic-embed-text");
+    println!("  Vision: llava:latest");
+    println!("  Database: {}", db_path.display());
+    println!("\n💡 Tip: Run 'rig config edit' to configure additional providers (Claude, GPT-4, etc.)\n");
 
     std::result::Result::Ok(())
 }
@@ -146,10 +213,13 @@ mod tests {
         std::assert!(rigger_dir.join("config.json").exists(), "config.json should exist");
         std::assert!(rigger_dir.join("tasks.db").exists(), "tasks.db should exist");
 
-        // Verify config.json content
+        // Verify config.json content (v3.0 format)
         let config_content = std::fs::read_to_string(rigger_dir.join("config.json")).unwrap();
-        let config: serde_json::Value = serde_json::from_str(&config_content).unwrap();
-        std::assert_eq!(config["provider"], "ollama");
+        let config: rigger_core::RiggerConfig = serde_json::from_str(&config_content).unwrap();
+        std::assert_eq!(config.version, "3.0");
+        std::assert!(config.providers.contains_key("ollama"));
+        std::assert_eq!(config.task_slots.main.provider, "ollama");
+        std::assert_eq!(config.task_slots.main.model, "llama3.2");
 
         // Cleanup (ignore errors if already cleaned)
         let _ = std::env::set_current_dir(original_dir);

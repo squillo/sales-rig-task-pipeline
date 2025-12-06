@@ -4437,24 +4437,40 @@ impl App {
                 config_path.to_str().unwrap_or(".rigger/config.json")
             );
 
-            // TODO Phase 2.2: Instantiate tools for LLM agent
-            // Tools are implemented and adapter wiring is complete, but we need to refactor
-            // App struct to store adapters as Arc<Mutex<Adapter>> instead of plain Adapter
-            // so they can be cloned and shared with tools. Currently SqliteTaskAdapter and
-            // SqliteArtifactAdapter don't implement Clone.
-            //
-            // Next steps:
-            // 1. Change db_adapter type to Arc<Mutex<SqliteTaskAdapter>>
-            // 2. Change artifact_adapter type to Arc<Mutex<SqliteArtifactAdapter>>
-            // 3. Update all adapter initialization and usage sites
-            // 4. Create tool instances here and pass to adapter
-            //
-            // For now, agent will work without tools (can still chat, but can't search/query)
-            let (search_artifacts_tool, search_tasks_tool, get_task_details_tool) = (
-                std::option::Option::None,
-                std::option::Option::None,
-                std::option::Option::None,
-            );
+            // Instantiate tools for LLM agent (Phase 2: Tool Calling) - NOW WORKING!
+            let (search_artifacts_tool, search_tasks_tool, get_task_details_tool) = {
+                // Create tools if adapters are available
+                let search_artifacts = if let (std::option::Option::Some(embedding_adapter), std::option::Option::Some(artifact_adapter)) =
+                    (self.embedding_adapter.clone(), self.artifact_adapter.clone())
+                {
+                    std::option::Option::Some(task_orchestrator::tools::SearchArtifactsTool::new(
+                        embedding_adapter,
+                        artifact_adapter,
+                        self.selected_project_id.clone(),
+                    ))
+                } else {
+                    std::option::Option::None
+                };
+
+                let search_tasks = if let std::option::Option::Some(db_adapter) = self.db_adapter.clone() {
+                    std::option::Option::Some(task_orchestrator::tools::SearchTasksTool::new(
+                        db_adapter.clone(),
+                        self.selected_project_id.clone(),
+                    ))
+                } else {
+                    std::option::Option::None
+                };
+
+                let get_task_details = if let std::option::Option::Some(db_adapter) = self.db_adapter.clone() {
+                    std::option::Option::Some(task_orchestrator::tools::GetTaskDetailsTool::new(
+                        db_adapter,
+                    ))
+                } else {
+                    std::option::Option::None
+                };
+
+                (search_artifacts, search_tasks, get_task_details)
+            };
 
             let adapter = match config {
                 std::result::Result::Ok(cfg) => {

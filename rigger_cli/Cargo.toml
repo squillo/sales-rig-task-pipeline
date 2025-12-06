@@ -14,6 +14,7 @@ path = "src/main.rs"
 task_manager = { path = "../task_manager" }
 task_orchestrator = { path = "../task_orchestrator" }
 transcript_extractor = { path = "../transcript_extractor" }
+rigger_core = { path = "../rigger_core" }
 hexser = { version = "0.4.7", features = ["macros"] }
 rig = { workspace = true }
 chrono = { workspace = true }

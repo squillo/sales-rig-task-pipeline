@@ -5,6 +5,7 @@
 //! the orchestration pipeline.
 //!
 //! Revision History
+//! - 2025-12-04T00:00:00Z @AI: Add config command handling for Phase 4.3 config management CLI.
 //! - 2025-11-30T21:45:00Z @AI: Add artifacts generate command for Phase 5 artifact generator CLI.
 //! - 2025-11-28T23:00:00Z @AI: Add artifacts command handling for Phase 6 RAG CLI (Tasks 6.1, 6.2).
 //! - 2025-11-24T01:05:00Z @AI: Add hexagonal architecture modules (ports, adapters, services) for clipboard integration.
@@ -15,6 +16,7 @@ mod display;
 mod ports;
 mod adapters;
 mod services;
+mod ui;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -82,6 +84,26 @@ async fn main() -> anyhow::Result<()> {
                         chunk_strategy.as_deref(),
                         parsed_chunk_size,
                         exclude.as_deref(),
+                    ).await?;
+                }
+            }
+        }
+        commands::Commands::Config { command } => {
+            match command {
+                commands::ConfigCommands::Show { path } => {
+                    commands::config::show(path.as_deref()).await?;
+                }
+                commands::ConfigCommands::Validate { path } => {
+                    commands::config::validate(path.as_deref()).await?;
+                }
+                commands::ConfigCommands::Edit => {
+                    commands::config::edit().await?;
+                }
+                commands::ConfigCommands::Migrate { path, output, backup } => {
+                    commands::config::migrate(
+                        path.as_deref(),
+                        output.as_deref(),
+                        backup,
                     ).await?;
                 }
             }

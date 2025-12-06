@@ -5,6 +5,7 @@
 //! adapters. Traits here are async and object-safe for use behind Arc<dyn _>.
 //!
 //! Revision History
+//! - 2025-12-03T00:00:00Z @AI: Add llm_agent_port for chain-of-thought chat agent implementation.
 //! - 2025-11-30T19:45:00Z @AI: Add web_crawler_port for Phase 3 artifact generator.
 //! - 2025-11-30T11:05:00Z @AI: Add vision_port for Phase 5 image processing implementation.
 //! - 2025-11-28T19:10:00Z @AI: Add embedding_port for Phase 1 RAG implementation.
@@ -21,3 +22,4 @@ pub mod metrics_collector_port;
 pub mod embedding_port;
 pub mod vision_port;
 pub mod web_crawler_port;
+pub mod llm_agent_port;

@@ -1709,7 +1709,7 @@ impl App {
 
             for task in &self.prd_view_tasks {
                 // Save to database
-                if let std::result::Result::Err(e) = adapter.save_async(task.clone()).await {
+                if let std::result::Result::Err(e) = adapter.lock().expect("Failed to lock db adapter").save_async(task.clone()).await {
                     save_errors.push(std::format!("Failed to save task sort_order: {}", e));
                 }
 
@@ -3256,7 +3256,7 @@ impl App {
 
                 // Save all tasks
                 for task in &tasks {
-                    if let Err(e) = adapter.save_async(task.clone()).await {
+                    if let Err(e) = adapter.lock().expect("Failed to lock db adapter").save_async(task.clone()).await {
                         self.prd_processing_state = PRDProcessingState::Failed {
                             error: std::format!("Failed to save task: {:?}", e),
                         };
@@ -3311,7 +3311,7 @@ impl App {
                                                             // Save subtask to database with source_prd_id set
                                                             let mut subtask_with_prd = subtask.clone();
                                                             subtask_with_prd.source_prd_id = std::option::Option::Some(prd.id.clone());
-                                                            if let Err(e) = adapter.save_async(subtask_with_prd).await {
+                                                            if let Err(e) = adapter.lock().expect("Failed to lock db adapter").save_async(subtask_with_prd).await {
                                                                 error_messages.push(std::format!("Failed to save subtask: {}", e));
                                                             }
                                                         }
@@ -3324,7 +3324,7 @@ impl App {
                                             let mut updated_parent = task.clone();
                                             updated_parent.subtask_ids = generated_subtasks.iter().map(|st| st.id.clone()).collect();
                                             updated_parent.status = task_manager::domain::task_status::TaskStatus::Decomposed;
-                                            if let Err(e) = adapter.save_async(updated_parent).await {
+                                            if let Err(e) = adapter.lock().expect("Failed to lock db adapter").save_async(updated_parent).await {
                                                 error_messages.push(std::format!("Failed to update parent task: {}", e));
                                             }
 
@@ -3439,7 +3439,7 @@ impl App {
                             task.agent_persona = std::option::Option::Some(persona_name);
 
                             // Update task in database
-                            if let std::result::Result::Err(e) = db_adapter.save_async(task.clone()).await {
+                            if let std::result::Result::Err(e) = db_adapter.lock().expect("Failed to lock db adapter").save_async(task.clone()).await {
                                 self.add_notification(
                                     NotificationLevel::Warning,
                                     std::format!("Failed to update task with persona: {}", e)
@@ -4054,7 +4054,7 @@ impl App {
         // Persist to database
         if let std::option::Option::Some(adapter) = &self.db_adapter {
             self.is_saving = true;
-            let save_result = adapter.save_async(task.clone()).await.map_err(|e| {
+            let save_result = adapter.lock().expect("Failed to lock db adapter").save_async(task.clone()).await.map_err(|e| {
                 anyhow::anyhow!("Failed to save task status: {:?}", e)
             });
             self.is_saving = false;
@@ -4388,7 +4388,7 @@ impl App {
             let task_clone = task.clone();
             let task_title = task.title.clone(); // Clone title for notification
 
-            match adapter.save_async(task_clone).await {
+            match adapter.lock().expect("Failed to lock db adapter").save_async(task_clone).await {
                 std::result::Result::Ok(_) => {
                     self.last_saved_at = std::option::Option::Some(chrono::Utc::now());
                     self.has_unsaved_changes = false;
@@ -5268,7 +5268,7 @@ impl App {
             let task_clone = new_task.clone();
             let task_title = new_task.title.clone();
 
-            match adapter.save_async(task_clone).await {
+            match adapter.lock().expect("Failed to lock db adapter").save_async(task_clone).await {
                 std::result::Result::Ok(_) => {
                     self.last_saved_at = std::option::Option::Some(chrono::Utc::now());
                     self.is_saving = false;
@@ -5994,7 +5994,7 @@ impl App {
                             let task_clone = task.clone();
                             let task_title = task.title.clone();
 
-                            match adapter.save_async(task_clone).await {
+                            match adapter.lock().expect("Failed to lock db adapter").save_async(task_clone).await {
                                 std::result::Result::Ok(_) => {
                                     self.add_notification(
                                         NotificationLevel::Success,
@@ -6345,7 +6345,7 @@ impl App {
         if let std::option::Option::Some(ref adapter) = self.db_adapter {
             for task in &self.tasks {
                 if task.id == current_id || task.id == prev_id {
-                    if let std::result::Result::Err(e) = adapter.save_async(task.clone()).await {
+                    if let std::result::Result::Err(e) = adapter.lock().expect("Failed to lock db adapter").save_async(task.clone()).await {
                         return std::result::Result::Err(std::format!("Failed to save task: {}", e));
                     }
                 }
@@ -6400,7 +6400,7 @@ impl App {
         if let std::option::Option::Some(ref adapter) = self.db_adapter {
             for task in &self.tasks {
                 if task.id == current_id || task.id == next_id {
-                    if let std::result::Result::Err(e) = adapter.save_async(task.clone()).await {
+                    if let std::result::Result::Err(e) = adapter.lock().expect("Failed to lock db adapter").save_async(task.clone()).await {
                         return std::result::Result::Err(std::format!("Failed to save task: {}", e));
                     }
                 }
@@ -6458,7 +6458,7 @@ impl App {
         if let std::option::Option::Some(ref adapter) = self.db_adapter {
             for task in &self.prd_view_tasks {
                 if task.id == current_id || task.id == prev_id {
-                    if let std::result::Result::Err(e) = adapter.save_async(task.clone()).await {
+                    if let std::result::Result::Err(e) = adapter.lock().expect("Failed to lock db adapter").save_async(task.clone()).await {
                         return std::result::Result::Err(std::format!("Failed to save task: {}", e));
                     }
                 }
@@ -6519,7 +6519,7 @@ impl App {
         if let std::option::Option::Some(ref adapter) = self.db_adapter {
             for task in &self.prd_view_tasks {
                 if task.id == current_id || task.id == next_id {
-                    if let std::result::Result::Err(e) = adapter.save_async(task.clone()).await {
+                    if let std::result::Result::Err(e) = adapter.lock().expect("Failed to lock db adapter").save_async(task.clone()).await {
                         return std::result::Result::Err(std::format!("Failed to save task: {}", e));
                     }
                 }

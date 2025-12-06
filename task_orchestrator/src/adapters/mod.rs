@@ -5,6 +5,7 @@
 //! architecture and are used by the graph nodes to perform work.
 //!
 //! Revision History
+//! - 2025-12-03T00:00:00Z @AI: Add rig_agent_adapter for chain-of-thought chat agent implementation.
 //! - 2025-11-30T20:15:00Z @AI: Add reqwest_web_crawler for Phase 3 artifact generator.
 //! - 2025-11-30T11:20:00Z @AI: Add rig_vision_adapter for Phase 5 image processing implementation.
 //! - 2025-11-28T19:45:00Z @AI: Add rig_embedding_adapter for Phase 3 RAG embedding generation.
@@ -27,3 +28,4 @@ pub mod sqlite_metrics_collector;
 pub mod rig_embedding_adapter;
 pub mod rig_vision_adapter;
 pub mod reqwest_web_crawler;
+pub mod rig_agent_adapter;
